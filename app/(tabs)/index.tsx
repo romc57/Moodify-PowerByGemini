@@ -1,98 +1,141 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
+import { RecommendationList } from '@/components/RecommendationList';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { FeedbackModal } from '@/components/ui/FeedbackModal';
+import { VitalsCard } from '@/components/VitalsCard';
+import { backgroundService } from '@/services/core/BackgroundService';
+import { notificationService } from '@/services/core/NotificationService';
+import { recommendationService } from '@/services/core/RecommendationService';
+import { RecommendationResponse } from '@/services/gemini/GeminiService';
+import { useVitalsStore } from '@/vitals/VitalsStore';
+import * as Notifications from 'expo-notifications';
+import { useEffect, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const { history } = useVitalsStore();
+  const [recommendation, setRecommendation] = useState<RecommendationResponse | null>(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [currentTrack, setCurrentTrack] = useState('');
+  const [loading, setLoading] = useState(false);
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+  // Initial Setup
+  useEffect(() => {
+    backgroundService.init();
+    notificationService.registerCategories();
+
+    // Listen for Feedback Notifications
+    const sub = Notifications.addNotificationResponseReceivedListener(response => {
+      const data = response.notification.request.content.data;
+      const actionId = response.actionIdentifier;
+
+      if (data.type === 'backround_feedback' || actionId === 'good' || actionId === 'bad') {
+        // Determine feedback from Action Button
+        if (actionId === 'good') handleFeedback("Good Vibes");
+        if (actionId === 'bad') handleFeedback("Not my vibe");
+
+        // Or if they tapped the body, open the modal
+        if (actionId === Notifications.DEFAULT_ACTION_IDENTIFIER) {
+          if (data.trackName) {
+            setCurrentTrack(data.trackName);
+            setModalVisible(true);
+          }
+        }
+      }
+    });
+
+    return () => sub.remove();
+  }, []);
+
+  // Auto-Trigger Recommendation when history grows (simulation)
+  useEffect(() => {
+    if (history.length > 0 && history.length % 6 === 0) { // Every 6s in simulation
+      fetchRecommendation();
+    }
+  }, [history.length]);
+
+  const fetchRecommendation = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      console.log('[Home] Fetching recommendation...');
+      const result = await recommendationService.getRecommendation();
+      if (result) {
+        setRecommendation(result);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePlay = () => {
+    if (recommendation?.suggestedAction.query) {
+      setCurrentTrack(recommendation.suggestedAction.query);
+      // Show player notification
+      notificationService.showPlayerNotification(
+        recommendation.suggestedAction.query,
+        "Moodify AI",
+        true
+      );
+
+      // Schedule a prompt for 30s later (Simulated here as 10s for demo)
+      setTimeout(() => {
+        notificationService.showFeedbackNotification(recommendation.suggestedAction.query);
+      }, 10000);
+    }
+  };
+
+  const handleFeedback = async (feedback: string) => {
+    await recommendationService.submitFeedback(currentTrack, feedback);
+    setModalVisible(false);
+    Alert.alert("Thanks", "AI has learned from your feedback.");
+    // Should we trigger a new recommendation?
+    fetchRecommendation();
+  };
+
+  return (
+    <ThemedView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <View style={styles.header}>
+          <ThemedText type="title">Moodify</ThemedText>
+          <ThemedText style={styles.subtitle}>Powered by Gemini</ThemedText>
+        </View>
+
+        <VitalsCard />
+
+        <RecommendationList
+          recommendation={recommendation}
+          onPlay={handlePlay}
+        />
+
+      </ScrollView>
+
+      <FeedbackModal
+        visible={modalVisible}
+        trackName={currentTrack}
+        onFeedback={handleFeedback}
+        onClose={() => setModalVisible(false)}
+      />
+    </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: {
+    flex: 1,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  header: {
+    paddingTop: 60,
+    paddingHorizontal: 20,
+    marginBottom: 10,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  subtitle: {
+    fontSize: 14,
+    color: '#64748B',
   },
+  scrollContent: {
+    paddingBottom: 50,
+  }
 });
