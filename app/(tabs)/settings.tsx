@@ -1,140 +1,591 @@
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { dbService } from '@/services/database/DatabaseService';
+/**
+ * Settings Screen - Modern Redesign
+ * Features: Gradient background, glassmorphism cards, modern theme selector
+ */
+
+import { GlassCard } from '@/components/ui/GlassCard';
+import { MODERN_THEMES, THEMES, ThemeName } from '@/constants/theme';
+import { gemini } from '@/services/gemini/GeminiService';
 import { useSpotifyAuth } from '@/services/spotify/SpotifyAuthService';
-import { useYouTubeAuth } from '@/services/youtube/YouTubeAuthService';
-import { useEffect, useState } from 'react';
-import { Alert, Button, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useSettingsStore } from '@/stores/SettingsStore';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import Animated, {
+  FadeInDown,
+  SharedValue,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring
+} from 'react-native-reanimated';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+// Modern theme names only
+const MODERN_THEME_NAMES: ThemeName[] = ['midnight', 'aurora', 'sunset', 'neon', 'ocean'];
+
+// Theme display info
+const THEME_INFO: Record<ThemeName, { icon: keyof typeof Ionicons.glyphMap; description: string }> = {
+  midnight: { icon: 'moon', description: 'Deep purple vibes' },
+  aurora: { icon: 'sparkles', description: 'Northern lights' },
+  sunset: { icon: 'sunny', description: 'Warm gradients' },
+  neon: { icon: 'flash', description: 'Cyberpunk pink' },
+  ocean: { icon: 'water', description: 'Deep blue waves' },
+};
 
 export default function SettingsScreen() {
-    // Configuration State
-    const [geminiKey, setGeminiKey] = useState('');
-    const [isGeminiSaving, setIsGeminiSaving] = useState(false);
+  const { theme, setTheme, autoTheme, setAutoTheme, geminiApiKey, setGeminiApiKey, spotifyClientId, setSpotifyClientId, loadSettings, isLoading, isConnected, checkConnection } = useSettingsStore();
 
-    // Auth Hooks (Static IDs from code)
-    const { request: requestSpotify, promptAsync: promptSpotify } = useSpotifyAuth();
-    const { request: requestYouTube, promptAsync: promptYouTube } = useYouTubeAuth();
+  const activeTheme = THEMES[theme] || THEMES.midnight;
 
-    useEffect(() => {
-        loadSettings();
-    }, []);
+  const [localGeminiKey, setLocalGeminiKey] = useState('');
+  const [localSpotifyClientId, setLocalSpotifyClientId] = useState('');
 
-    const loadSettings = async () => {
-        const gKey = await dbService.getSecret('gemini_api_key');
-        if (gKey) setGeminiKey(gKey);
-    };
+  const { request, promptAsync } = useSpotifyAuth();
 
-    const saveSettings = async () => {
-        setIsGeminiSaving(true);
-        try {
-            if (geminiKey.trim()) {
-                await dbService.setSecret('gemini_api_key', geminiKey.trim());
-                Alert.alert('Saved', 'Gemini Key saved.');
-            }
-        } catch (e) {
-            Alert.alert('Error', 'Failed to save settings.');
-        } finally {
-            setIsGeminiSaving(false);
-        }
-    };
+  // Button animations
+  const saveScale = useSharedValue(1);
+  const spotifyScale = useSharedValue(1);
 
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  useEffect(() => {
+    if (geminiApiKey) setLocalGeminiKey(geminiApiKey);
+  }, [geminiApiKey]);
+
+  useEffect(() => {
+    if (spotifyClientId) setLocalSpotifyClientId(spotifyClientId);
+  }, [spotifyClientId]);
+
+  // Check connection status when returning to screen or after auth
+  useEffect(() => {
+    checkConnection();
+  }, []);
+
+  const handleSave = async () => {
+    // Validate Gemini Key if changed or empty (allow clearing?)
+    if (localGeminiKey) {
+      console.log('Validating Gemini Key...');
+      // We need to access the service directly since the store only sets it
+      // Importing gemini singleton to validate
+      const validation = await gemini.validateKey(localGeminiKey);
+
+      if (!validation.valid) {
+        Alert.alert("Validation Failed", `Gemini API Key is invalid.\n${validation.error || ''}`);
+        return;
+      }
+    }
+
+    await setGeminiApiKey(localGeminiKey);
+    await setSpotifyClientId(localSpotifyClientId);
+    Alert.alert("Success", "API Keys saved & verified!");
+  };
+
+  const handleThemeSelect = (t: ThemeName) => {
+    setTheme(t);
+  };
+
+  const handleSpotifyLogin = async () => {
+    try {
+      console.log('[Settings] Spotify login initiated...');
+      console.log('[Settings] Request object:', request ? 'Available' : 'Not available');
+
+      const result = await promptAsync();
+      console.log('[Settings] promptAsync result:', result);
+
+      if (result?.type === 'success') {
+        console.log('[Settings] Auth success! Waiting for token exchange...');
+        // Give a moment for the token exchange to happen in the background service
+        setTimeout(() => {
+          checkConnection();
+          Alert.alert("Connected!", "Spotify linked successfully.");
+        }, 1500);
+      } else if (result?.type === 'cancel') {
+        console.log('[Settings] User cancelled auth');
+        Alert.alert("Cancelled", "Spotify login was cancelled.");
+      } else if (result?.type === 'error') {
+        console.error('[Settings] Auth error:', result);
+        Alert.alert("Error", `Spotify auth failed: ${result.error?.message || 'Unknown error'}`);
+      } else {
+        console.log('[Settings] Auth result type:', result?.type);
+        Alert.alert("Notice", "Spotify login did not complete successfully.");
+      }
+    } catch (e) {
+      console.error('[Settings] handleSpotifyLogin error:', e);
+      Alert.alert("Error", "Spotify Login failed");
+    }
+  };
+
+  const createPressHandlers = (scaleValue: SharedValue<number>) => ({
+    onPressIn: () => {
+      scaleValue.value = withSpring(0.95, { damping: 15, stiffness: 400 });
+    },
+    onPressOut: () => {
+      scaleValue.value = withSpring(1, { damping: 15, stiffness: 400 });
+    },
+  });
+
+  const saveButtonStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: saveScale.value }],
+  }));
+
+  const spotifyButtonStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: spotifyScale.value }],
+  }));
+
+  if (isLoading) {
     return (
-        <ThemedView style={styles.container}>
-            <View style={styles.header}>
-                <ThemedText type="title">Settings</ThemedText>
-            </View>
-
-            <ScrollView contentContainerStyle={styles.scroll}>
-
-                {/* Credentials Section */}
-                <ThemedView style={styles.section}>
-                    <ThemedText type="subtitle">AI Configuration</ThemedText>
-                    <ThemedText style={styles.description}>
-                        Enter your Gemini API Key.
-                    </ThemedText>
-
-                    <TextInput
-                        style={styles.input}
-                        value={geminiKey}
-                        onChangeText={setGeminiKey}
-                        placeholder="Gemini API Key"
-                        placeholderTextColor="#666"
-                        secureTextEntry
-                    />
-
-                    <Button
-                        title={isGeminiSaving ? "Saving..." : "Save API Key"}
-                        onPress={saveSettings}
-                        disabled={isGeminiSaving}
-                    />
-                </ThemedView>
-
-                {/* Connections Section */}
-                <ThemedView style={styles.section}>
-                    <ThemedText type="subtitle">Service Connections</ThemedText>
-                    <ThemedText style={styles.description}>
-                        Configure Client IDs in .env file.
-                    </ThemedText>
-
-                    <View style={styles.connRow}>
-                        <Button
-                            disabled={!requestSpotify}
-                            title="Connect Spotify"
-                            onPress={() => promptSpotify()}
-                            color="#1DB954"
-                        />
-                    </View>
-
-                    <View style={styles.connRow}>
-                        <Button
-                            disabled={!requestYouTube}
-                            title="Connect YouTube"
-                            onPress={() => promptYouTube()}
-                            color="#FF0000"
-                        />
-                    </View>
-                </ThemedView>
-
-            </ScrollView>
-        </ThemedView>
+      <LinearGradient
+        colors={[activeTheme.gradientStart, activeTheme.gradientMid, activeTheme.gradientEnd]}
+        style={[styles.container, styles.loadingContainer]}
+      >
+        <ActivityIndicator color={activeTheme.primary} size="large" />
+      </LinearGradient>
     );
+  }
+
+  return (
+    <LinearGradient
+      colors={[activeTheme.gradientStart, activeTheme.gradientMid, activeTheme.gradientEnd]}
+      style={styles.container}
+    >
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <Animated.View entering={FadeInDown.delay(100).duration(500)}>
+          <Text style={[styles.header, { color: activeTheme.text }]}>Settings</Text>
+        </Animated.View>
+
+        {/* Theme Section */}
+        <Animated.View entering={FadeInDown.delay(200).duration(500)} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="color-palette-outline" size={20} color={activeTheme.aiPurple} />
+            <Text style={[styles.sectionTitle, { color: activeTheme.textSecondary }]}>Theme</Text>
+          </View>
+
+          {/* Auto Theme Toggle */}
+          <Pressable
+            onPress={() => setAutoTheme(!autoTheme)}
+            style={[
+              styles.autoThemeToggle,
+              { backgroundColor: activeTheme.surface, borderColor: activeTheme.border }
+            ]}
+          >
+            <View style={styles.toggleLeft}>
+              <Ionicons name="color-wand-outline" size={18} color={activeTheme.aiPurple} />
+              <View>
+                <Text style={[styles.toggleTitle, { color: activeTheme.text }]}>Auto Theme</Text>
+                <Text style={[styles.toggleDesc, { color: activeTheme.textMuted }]}>Change theme based on mood</Text>
+              </View>
+            </View>
+            <View
+              style={[
+                styles.toggleSwitch,
+                {
+                  backgroundColor: autoTheme ? activeTheme.aiPurple : activeTheme.surfaceStrong,
+                }
+              ]}
+            >
+              <View
+                style={[
+                  styles.toggleKnob,
+                  {
+                    transform: [{ translateX: autoTheme ? 20 : 0 }],
+                    backgroundColor: '#fff',
+                  }
+                ]}
+              />
+            </View>
+          </Pressable>
+
+          <View style={styles.themeGrid}>
+            {MODERN_THEME_NAMES.map((t) => {
+              const themeData = MODERN_THEMES[t];
+              const info = THEME_INFO[t];
+              const isSelected = theme === t;
+
+              return (
+                <Pressable
+                  key={t}
+                  onPress={() => handleThemeSelect(t)}
+                  style={[
+                    styles.themeCard,
+                    {
+                      borderColor: isSelected ? themeData.primaryGlow : 'transparent',
+                      backgroundColor: isSelected ? `${themeData.primaryGlow}15` : activeTheme.surface,
+                    },
+                  ]}
+                >
+                  <LinearGradient
+                    colors={[themeData.gradientStart, themeData.gradientEnd]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.themePreview}
+                  >
+                    <View
+                      style={[
+                        styles.themeAccent,
+                        { backgroundColor: themeData.primaryGlow },
+                      ]}
+                    />
+                  </LinearGradient>
+                  <View style={styles.themeInfo}>
+                    <View style={styles.themeNameRow}>
+                      <Ionicons name={info.icon} size={14} color={themeData.primaryGlow} />
+                      <Text style={[styles.themeName, { color: activeTheme.text }]}>
+                        {t.charAt(0).toUpperCase() + t.slice(1)}
+                      </Text>
+                    </View>
+                    <Text style={[styles.themeDesc, { color: activeTheme.textMuted }]}>
+                      {info.description}
+                    </Text>
+                  </View>
+                  {isSelected && (
+                    <View style={[styles.checkmark, { backgroundColor: themeData.primaryGlow }]}>
+                      <Ionicons name="checkmark" size={12} color="#000" />
+                    </View>
+                  )}
+                </Pressable>
+              );
+            })}
+          </View>
+        </Animated.View>
+
+        {/* API Keys Section */}
+        <Animated.View entering={FadeInDown.delay(300).duration(500)} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="key-outline" size={20} color={activeTheme.aiPurple} />
+            <Text style={[styles.sectionTitle, { color: activeTheme.textSecondary }]}>API Keys</Text>
+          </View>
+
+          <GlassCard
+            glowColor={activeTheme.primaryGlow}
+            borderGlow={false}
+            padding={16}
+            borderRadius={16}
+          >
+            <Text style={[styles.label, { color: activeTheme.text }]}>Gemini API Key</Text>
+            <TextInput
+              style={[
+                styles.input,
+                {
+                  color: activeTheme.text,
+                  borderColor: activeTheme.border,
+                  backgroundColor: 'rgba(0,0,0,0.2)',
+                },
+              ]}
+              value={localGeminiKey}
+              onChangeText={setLocalGeminiKey}
+              placeholder="Enter Gemini API Key"
+              placeholderTextColor={activeTheme.textMuted}
+              secureTextEntry
+            />
+
+            <Text style={[styles.label, { color: activeTheme.text, marginTop: 12 }]}>Spotify Client ID</Text>
+            <TextInput
+              style={[
+                styles.input,
+                {
+                  color: activeTheme.text,
+                  borderColor: activeTheme.border,
+                  backgroundColor: 'rgba(0,0,0,0.2)',
+                },
+              ]}
+              value={localSpotifyClientId}
+              onChangeText={setLocalSpotifyClientId}
+              placeholder="Enter Spotify Client ID"
+              placeholderTextColor={activeTheme.textMuted}
+              autoCapitalize="none"
+            />
+
+            <AnimatedPressable
+              onPress={handleSave}
+              style={saveButtonStyle}
+              {...createPressHandlers(saveScale)}
+            >
+              <LinearGradient
+                colors={[activeTheme.aiPurple, activeTheme.accentGradientEnd]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.saveButton}
+              >
+                <Ionicons name="save-outline" size={18} color="#fff" />
+                <Text style={styles.saveButtonText}>Save Keys</Text>
+              </LinearGradient>
+            </AnimatedPressable>
+          </GlassCard>
+        </Animated.View>
+
+        {/* Account Section */}
+        <Animated.View entering={FadeInDown.delay(400).duration(500)} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="person-outline" size={20} color={activeTheme.aiPurple} />
+            <Text style={[styles.sectionTitle, { color: activeTheme.textSecondary }]}>Account</Text>
+            {isConnected && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 'auto', gap: 4 }}>
+                <Ionicons name="checkmark-circle" size={16} color="#4ADE80" />
+                <Text style={{ color: '#4ADE80', fontSize: 12, fontWeight: '600' }}>Connected</Text>
+              </View>
+            )}
+            {!isConnected && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 'auto', gap: 4 }}>
+                <Ionicons name="warning" size={16} color={activeTheme.error || '#FF4444'} />
+                <Text style={{ color: activeTheme.error || '#FF4444', fontSize: 12, fontWeight: '600' }}>Not Connected</Text>
+              </View>
+            )}
+          </View>
+
+          <AnimatedPressable
+            onPress={handleSpotifyLogin}
+            disabled={!request}
+            style={spotifyButtonStyle}
+            {...createPressHandlers(spotifyScale)}
+          >
+            <LinearGradient
+              colors={isConnected ? [activeTheme.surface, activeTheme.surface] : ['#1DB954', '#1ED760']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={[
+                styles.spotifyButton,
+                !request && styles.buttonDisabled,
+                isConnected && { borderWidth: 1, borderColor: activeTheme.border }
+              ]}
+            >
+              <Ionicons name="musical-notes" size={22} color={isConnected ? activeTheme.text : "#000"} />
+              <Text style={[styles.spotifyButtonText, isConnected && { color: activeTheme.text }]}>
+                {isConnected ? "Reconnect Spotify" : "Log in with Spotify"}
+              </Text>
+            </LinearGradient>
+          </AnimatedPressable>
+        </Animated.View>
+
+        {/* About Section */}
+        <Animated.View entering={FadeInDown.delay(500).duration(500)} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="information-circle-outline" size={20} color={activeTheme.aiPurple} />
+            <Text style={[styles.sectionTitle, { color: activeTheme.textSecondary }]}>About</Text>
+          </View>
+
+          <GlassCard
+            glowColor={activeTheme.primaryGlow}
+            borderGlow={false}
+            padding={16}
+            borderRadius={16}
+          >
+            <View style={styles.aboutRow}>
+              <Text style={[styles.aboutLabel, { color: activeTheme.textSecondary }]}>Version</Text>
+              <Text style={[styles.aboutValue, { color: activeTheme.text }]}>2.0.0</Text>
+            </View>
+            <View style={styles.aboutRow}>
+              <Text style={[styles.aboutLabel, { color: activeTheme.textSecondary }]}>AI Engine</Text>
+              <Text style={[styles.aboutValue, { color: activeTheme.text }]}>Gemini Pro</Text>
+            </View>
+            <View style={styles.aboutRow}>
+              <Text style={[styles.aboutLabel, { color: activeTheme.textSecondary }]}>Privacy</Text>
+              <Text style={[styles.aboutValue, { color: activeTheme.spotifyGreen }]}>Local Data Only</Text>
+            </View>
+          </GlassCard>
+        </Animated.View>
+      </ScrollView>
+    </LinearGradient>
+  );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-    },
-    header: {
-        paddingTop: 60,
-        paddingHorizontal: 20,
-        paddingBottom: 20,
-    },
-    scroll: {
-        padding: 20,
-    },
-    section: {
-        marginBottom: 30,
-        gap: 10,
-        backgroundColor: 'rgba(0,0,0,0.03)',
-        padding: 15,
-        borderRadius: 12
-    },
-    description: {
-        fontSize: 14,
-        color: '#888',
-        marginBottom: 5,
-    },
-    input: {
-        backgroundColor: 'rgba(255,255,255,0.8)',
-        borderRadius: 8,
-        padding: 12,
-        color: '#000',
-        fontSize: 16,
-        borderWidth: 1,
-        borderColor: '#ccc',
-        marginBottom: 10
-    },
-    connRow: {
-        marginBottom: 10
-    }
+  container: {
+    flex: 1,
+  },
+  loadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  content: {
+    padding: 24,
+    paddingTop: 60,
+    paddingBottom: 120,
+  },
+  header: {
+    fontSize: 32,
+    fontWeight: '700',
+    marginBottom: 32,
+    letterSpacing: -0.5,
+  },
+  section: {
+    marginBottom: 28,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 13,
+    textTransform: 'uppercase',
+    letterSpacing: 1.2,
+    fontWeight: '600',
+  },
+  themeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  themeCard: {
+    width: '47%',
+    borderRadius: 16,
+    borderWidth: 2,
+    padding: 12,
+    position: 'relative',
+  },
+  themePreview: {
+    height: 50,
+    borderRadius: 10,
+    marginBottom: 10,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  themeAccent: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+  },
+  themeInfo: {
+    gap: 2,
+  },
+  themeNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  themeName: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  themeDesc: {
+    fontSize: 11,
+    marginLeft: 20,
+  },
+  checkmark: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 8,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 15,
+    marginBottom: 16,
+  },
+  saveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    padding: 14,
+    borderRadius: 12,
+  },
+  saveButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  spotifyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    padding: 16,
+    borderRadius: 14,
+    shadowColor: '#1DB954',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  spotifyButtonText: {
+    color: '#000',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+  aboutRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  aboutLabel: {
+    fontSize: 14,
+  },
+  aboutValue: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  autoThemeToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  toggleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  toggleTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  toggleDesc: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  toggleSwitch: {
+    width: 48,
+    height: 28,
+    borderRadius: 14,
+    padding: 2,
+    justifyContent: 'center',
+  },
+  toggleKnob: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+  },
 });

@@ -1,19 +1,10 @@
 import * as SQLite from 'expo-sqlite';
 
-export interface VitalsHistoryItem {
-    id: number;
-    type: string; // 'heart_rate' | 'stress_level' | 'hrv'
-    value: number;
-    timestamp: number;
-    context?: string; // 'spotify_session', 'baseline', etc.
-}
-
 export interface FeedbackItem {
     id: number;
     track: string;
     feedback: string;
     timestamp: number;
-    vitals_change?: string; // e.g. "HR -5bpm"
 }
 
 class DatabaseService {
@@ -27,20 +18,7 @@ class DatabaseService {
         this.db = await SQLite.openDatabaseAsync('moodify.db');
         await this.db.execAsync(`
       PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS vitals_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        type TEXT NOT NULL,
-        value REAL NOT NULL,
-        timestamp INTEGER NOT NULL,
-        context TEXT
-      );
-      CREATE TABLE IF NOT EXISTS baseline (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        avg_hr REAL,
-        avg_stress REAL,
-        last_updated INTEGER
-      );
+
       CREATE TABLE IF NOT EXISTS user_services (
         service_name TEXT PRIMARY KEY,
         access_token TEXT,
@@ -51,56 +29,264 @@ class DatabaseService {
         key TEXT PRIMARY KEY,
         value TEXT
       );
-      CREATE TABLE IF NOT EXISTS app_secrets (
-        key TEXT PRIMARY KEY,
-        value TEXT
-      );
       CREATE TABLE IF NOT EXISTS feedback_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         track TEXT,
         feedback TEXT,
-        timestamp INTEGER,
-        vitals_change TEXT
+        timestamp INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS user_preferences (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS listening_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        spotify_track_id TEXT NOT NULL,
+        track_name TEXT,
+        artist_name TEXT,
+        played_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        skipped BOOLEAN DEFAULT 0,
+        context TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS tracks (
+        spotify_track_id TEXT PRIMARY KEY,
+        track_name TEXT,
+        artist_name TEXT,
+        play_count INTEGER DEFAULT 1,
+        last_played_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS daily_play_log (
+        spotify_track_id TEXT PRIMARY KEY,
+        played_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_history_played_at ON listening_history(played_at);
+      CREATE INDEX IF NOT EXISTS idx_history_track_id ON listening_history(spotify_track_id);
+      CREATE INDEX IF NOT EXISTS idx_tracks_play_count ON tracks(play_count);
+
+      CREATE TABLE IF NOT EXISTS gemini_reasoning (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        user_context_snapshot TEXT,
+        model_reasoning TEXT,
+        suggested_action TEXT
       );
     `);
-        console.log('[Database] Initialized');
+        console.log('[Database] Initialized with New Schema');
+
+        // Clear daily log if it's a new day (simple check)
+        this.checkAndClearDailyLog();
     }
 
-    async logVital(type: string, value: number, context: string = 'background') {
-        if (!this.db) await this.init();
+    private async checkAndClearDailyLog() {
+        if (!this.db) return;
         try {
-            await this.db!.runAsync(
-                'INSERT INTO vitals_history (type, value, timestamp, context) VALUES (?, ?, ?, ?)',
-                type, value, Date.now(), context
+            const result = await this.db.getFirstAsync<{ last_clear: string }>(
+                "SELECT value as last_clear FROM user_preferences WHERE key = 'last_daily_clear'"
             );
+
+            const today = new Date().toISOString().split('T')[0];
+            if (!result || result.last_clear !== today) {
+                console.log('[Database] New Day - Clearing Daily Log');
+                await this.db.runAsync('DELETE FROM daily_play_log');
+                await this.setPreference('last_daily_clear', today);
+            }
         } catch (e) {
-            console.error('[Database] Log Error', e);
+            console.warn('[Database] Daily Clear Check Failed', e);
         }
     }
 
-    async logFeedback(track: string, feedback: string, vitalsChange?: string) {
+    // --- New Features (Moodification) ---
+
+    // Preferences
+    async getPreference(key: string): Promise<string | null> {
+        if (!this.db) await this.init();
+        try {
+            const result = await this.db!.getFirstAsync<{ value: string }>(
+                'SELECT value FROM user_preferences WHERE key = ?;',
+                [key]
+            );
+            return result ? result.value : null;
+        } catch (e) {
+            console.warn('[Database] GetPreference missed, trying app_secrets');
+            return this.getSecret(key); // Fallback
+        }
+    }
+
+    async setPreference(key: string, value: string) {
         if (!this.db) await this.init();
         try {
             await this.db!.runAsync(
-                'INSERT INTO feedback_history (track, feedback, timestamp, vitals_change) VALUES (?, ?, ?, ?)',
-                track, feedback, Date.now(), vitalsChange || null
+                'INSERT OR REPLACE INTO user_preferences (key, value) VALUES (?, ?);',
+                [key, value]
+            );
+        } catch (e) {
+            console.error('[Database] SetPreference Error', e);
+        }
+    }
+
+    // Listening History & Skips (Unified Recording)
+    async recordPlay(
+        spotifyTrackId: string,
+        trackName: string,
+        artistName: string,
+        skipped: boolean,
+        context: object
+    ) {
+        if (!this.db) await this.init();
+        try {
+            // 1. Log to History
+            await this.db!.runAsync(
+                `INSERT INTO listening_history (spotify_track_id, track_name, artist_name, skipped, context)
+                 VALUES (?, ?, ?, ?, ?);`,
+                [spotifyTrackId, trackName, artistName, skipped, JSON.stringify(context)]
+            );
+
+            // 2. Upsert Track Count (Only if NOT skipped)
+            if (!skipped) {
+                await this.db!.runAsync(
+                    `INSERT INTO tracks (spotify_track_id, track_name, artist_name, play_count, last_played_at)
+                     VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+                     ON CONFLICT(spotify_track_id) DO UPDATE SET
+                        play_count = play_count + 1,
+                        last_played_at = CURRENT_TIMESTAMP;`,
+                    [spotifyTrackId, trackName, artistName]
+                );
+
+                // 3. Add to Daily Log (Upsert safe)
+                await this.db!.runAsync(
+                    `INSERT OR REPLACE INTO daily_play_log (spotify_track_id, played_at)
+                     VALUES (?, CURRENT_TIMESTAMP);`,
+                    [spotifyTrackId]
+                );
+            }
+        } catch (e) {
+            console.error('[Database] RecordPlay Transaction Error', e);
+        }
+    }
+
+    /**
+     * @deprecated Use recordPlay instead
+     */
+    async addHistoryItem(
+        spotifyTrackId: string,
+        trackName: string,
+        artistName: string,
+        skipped: boolean,
+        context: object
+    ) {
+        return this.recordPlay(spotifyTrackId, trackName, artistName, skipped, context);
+    }
+
+    async getRecentHistory(limit: number = 20): Promise<any[]> {
+        if (!this.db) await this.init();
+        try {
+            // Join with tracks to get play_count
+            return await this.db!.getAllAsync(
+                `SELECT h.*, t.play_count 
+                 FROM listening_history h
+                 LEFT JOIN tracks t ON h.spotify_track_id = t.spotify_track_id
+                 ORDER BY h.played_at DESC LIMIT ?;`,
+                [limit]
+            );
+        } catch (e) {
+            console.error('[Database] GetRecentHistory Error', e);
+            return [];
+        }
+    }
+
+    async getSkipRate(minutes: number = 5): Promise<number> {
+        // Input validation to prevent SQL injection
+        if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) {
+            console.warn('[Database] Invalid minutes parameter for getSkipRate:', minutes);
+            return 0;
+        }
+
+        if (!this.db) await this.init();
+        try {
+            const result = await this.db!.getFirstAsync<{ count: number }>(
+                `SELECT COUNT(*) as count FROM listening_history
+       WHERE skipped = 1
+       AND played_at > datetime('now', '-' || ? || ' minutes');`,
+                [minutes]
+            );
+            return result?.count || 0;
+        } catch (e) {
+            console.error('[Database] GetSkipRate Error', e);
+            return 0;
+        }
+    }
+
+    async getDailyHistory(): Promise<string[]> {
+        // Returns URIs of tracks played today
+        if (!this.db) await this.init();
+        try {
+            // Use the fast table
+            const result = await this.db!.getAllAsync<{ spotify_track_id: string }>(
+                `SELECT spotify_track_id FROM daily_play_log`
+            );
+            // Convert simple IDs back to URIs if needed, or just return IDs.
+            // Assuming caller expects "Track - Artist" strings based on previous interface?
+            // Actually, for exclusion, IDs/URIs are better.
+            // Let's check usage. If it expects strings, we might need a join or duplicate data.
+            // For now, let's keep the signature but fetch from tracks table via join for names
+
+            const resultWithNames = await this.db!.getAllAsync<{ track_name: string, artist_name: string }>(
+                `SELECT t.track_name, t.artist_name 
+                 FROM daily_play_log d
+                 JOIN tracks t ON d.spotify_track_id = t.spotify_track_id`
+            );
+
+            return resultWithNames.map(item => `${item.track_name} - ${item.artist_name}`);
+        } catch (e) {
+            console.error('[Database] GetDailyHistory Error', e);
+            return [];
+        }
+    }
+
+    // Gemini Reasoning
+    async logReasoning(
+        userContext: object,
+        reasoning: string,
+        suggestedAction: string
+    ) {
+        if (!this.db) await this.init();
+        try {
+            await this.db!.runAsync(
+                `INSERT INTO gemini_reasoning (user_context_snapshot, model_reasoning, suggested_action)
+       VALUES (?, ?, ?);`,
+                [JSON.stringify(userContext), reasoning, suggestedAction]
+            );
+        } catch (e) {
+            console.error('[Database] LogReasoning Error', e);
+        }
+    }
+
+    async getLastReasoning(): Promise<any | null> {
+        if (!this.db) await this.init();
+        try {
+            return await this.db!.getFirstAsync(
+                'SELECT * FROM gemini_reasoning ORDER BY timestamp DESC LIMIT 1;'
+            );
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // --- Legacy Methods ---
+
+    async logFeedback(track: string, feedback: string) {
+        if (!this.db) await this.init();
+        try {
+            await this.db!.runAsync(
+                'INSERT INTO feedback_history (track, feedback, timestamp) VALUES (?, ?, ?)',
+                [track, feedback, Date.now()]
             );
         } catch (e) {
             console.error('[Database] LogFeedback Error', e);
-        }
-    }
-
-    async getHistory(limit: number = 50): Promise<VitalsHistoryItem[]> {
-        if (!this.db) await this.init();
-        try {
-            const result = await this.db!.getAllAsync<VitalsHistoryItem>(
-                'SELECT * FROM vitals_history ORDER BY timestamp DESC LIMIT ?',
-                limit
-            );
-            return result;
-        } catch (e) {
-            console.error('[Database] Fetch Error', e);
-            return [];
         }
     }
 
@@ -109,7 +295,7 @@ class DatabaseService {
         try {
             const result = await this.db!.getAllAsync<FeedbackItem>(
                 'SELECT * FROM feedback_history ORDER BY timestamp DESC LIMIT ?',
-                limit
+                [limit]
             );
             return result;
         } catch (e) {
@@ -122,10 +308,10 @@ class DatabaseService {
         if (!this.db) await this.init();
         try {
             await this.db!.runAsync(
-                `INSERT INTO user_services (service_name, access_token, refresh_token, expires_at) 
-                 VALUES (?, ?, ?, ?) 
+                `INSERT INTO user_services (service_name, access_token, refresh_token, expires_at)
+                 VALUES (?, ?, ?, ?)
                  ON CONFLICT(service_name) DO UPDATE SET access_token=excluded.access_token, refresh_token=excluded.refresh_token`,
-                service, token, refreshToken || null, Date.now() + 3600000 // Fake 1hr expiry
+                [service, token, refreshToken || null, Date.now() + 3600000] // Fake 1hr expiry
             );
         } catch (e) {
             console.error('[Database] SetToken Error', e);
@@ -137,7 +323,7 @@ class DatabaseService {
         try {
             const result = await this.db!.getFirstAsync<{ access_token: string }>(
                 'SELECT access_token FROM user_services WHERE service_name = ?',
-                service
+                [service]
             );
             return result?.access_token || null;
         } catch (e) {
@@ -146,12 +332,25 @@ class DatabaseService {
         }
     }
 
+    async removeServiceToken(service: string) {
+        if (!this.db) await this.init();
+        try {
+            await this.db!.runAsync(
+                'DELETE FROM user_services WHERE service_name = ?',
+                [service]
+            );
+            console.log(`[Database] Removed token for ${service}`);
+        } catch (e) {
+            console.error('[Database] RemoveToken Error', e);
+        }
+    }
+
     async getRefreshToken(service: string): Promise<string | null> {
         if (!this.db) await this.init();
         try {
             const result = await this.db!.getFirstAsync<{ refresh_token: string }>(
                 'SELECT refresh_token FROM user_services WHERE service_name = ?',
-                service
+                [service]
             );
             return result?.refresh_token || null;
         } catch (e) {
@@ -165,7 +364,7 @@ class DatabaseService {
         try {
             await this.db!.runAsync(
                 'INSERT INTO app_secrets (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                key, value
+                [key, value]
             );
         } catch (e) {
             console.error('[Database] SetSecret Error', e);
@@ -177,7 +376,7 @@ class DatabaseService {
         try {
             const result = await this.db!.getFirstAsync<{ value: string }>(
                 'SELECT value FROM app_secrets WHERE key = ?',
-                key
+                [key]
             );
             return result?.value || null;
         } catch (e) {

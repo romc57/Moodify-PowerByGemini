@@ -19,7 +19,7 @@ export const FeedbackModal = ({ visible, trackName, onFeedback, onClose }: Props
             <View style={styles.centeredView}>
                 <View style={styles.modalView}>
                     <Text style={styles.title}>How is the vibe?</Text>
-                    <Text style={styles.subtitle}>"{trackName}"</Text>
+                    <Text style={styles.subtitle}>&quot;{trackName}&quot;</Text>
 
                     <View style={styles.options}>
                         <Pressable

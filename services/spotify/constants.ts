@@ -1,2 +1,6 @@
-export const SPOTIFY_CLIENT_ID = process.env.EXPO_PUBLIC_SPOTIFY_CLIENT_ID || '';
-// Note: SPOTIFY_CLIENT_SECRET is not needed for Implicit/PKCE flow and should not be stored in client code.
+// Spotify Client ID is now stored in the database and entered via Settings page
+// This file is kept for backwards compatibility but the constant is deprecated
+// Use getSpotifyClientId() from SpotifyAuthService or SpotifyRemoteService instead
+
+/** @deprecated Use getSpotifyClientId() from database instead */
+export const DEFAULT_SPOTIFY_CLIENT_ID = '';

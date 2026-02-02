@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ChangeListManager">
+    <list default="true" id="6c9fb624-0c0f-49eb-b266-e680eb6a82d6" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app.json" beforeDir="false" afterPath="$PROJECT_DIR$/app.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/(tabs)/_layout.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app/(tabs)/_layout.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/(tabs)/index.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app/(tabs)/index.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/(tabs)/settings.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app/(tabs)/settings.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/_layout.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app/_layout.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/components/RecommendationList.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/components/RecommendationList.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/components/VitalsCard.tsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/components/dashboard/VitalsSimulationCard.tsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/components/ui/FeedbackModal.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/components/ui/FeedbackModal.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/constants/theme.ts" beforeDir="false" afterPath="$PROJECT_DIR$/constants/theme.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/package-lock.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/ServiceRegistry.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/core/BackgroundService.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/core/NotificationService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/services/core/NotificationService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/core/RecommendationService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/services/core/RecommendationService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/core/types.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/database/DatabaseService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/services/database/DatabaseService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/gemini/GeminiService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/services/gemini/GeminiService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/spotify/SpotifyAuthService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/services/spotify/SpotifyAuthService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/spotify/SpotifyRemoteService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/services/spotify/SpotifyRemoteService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/spotify/constants.ts" beforeDir="false" afterPath="$PROJECT_DIR$/services/spotify/constants.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/youtube/YouTubeAuthService.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/youtube/YouTubeService.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/vitals/VitalsStore.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/vitals/providers/MockVitalsProvider.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/vitals/types.ts" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;romc57&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/romc57/Moodify-PowerByGemini.git&quot;,
+    &quot;accountId&quot;: &quot;f4f2fad1-ccc6-4c8a-ab06-349869409000&quot;
+  }
+}</component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;customColor&quot;: &quot;&quot;,
+  &quot;associatedIndex&quot;: 6
+}</component>
+  <component name="ProjectId" id="37w2pV8LuMLOJaMeb0zZIgGhLdr" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  }
+}</component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-2fc7cc6b9a17-intellij.indexing.shared.core-IU-253.30387.90" />
+        <option value="bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-IU-253.30387.90" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="6c9fb624-0c0f-49eb-b266-e680eb6a82d6" name="Changes" comment="" />
+      <created>1767799997930</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1767799997930</updated>
+      <workItem from="1767800001713" duration="14000" />
+      <workItem from="1769607027262" duration="7000" />
+    </task>
+    <servers />
+  </component>
+</project>
