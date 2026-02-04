@@ -9,6 +9,7 @@ import { gemini } from '../../../services/gemini/GeminiService';
 jest.mock('../../../services/database', () => ({
     dbService: {
         getPreference: jest.fn().mockResolvedValue('test_api_key'),
+        setPreference: jest.fn().mockResolvedValue(true),
     }
 }));
 
@@ -26,7 +27,7 @@ describe('GeminiService Error Handling', () => {
     describe('Concurrent Request Blocking', () => {
         it('should block concurrent requests', async () => {
             // Mock a slow request
-            (axios.post as jest.Mock).mockImplementation(() => 
+            (axios.post as jest.Mock).mockImplementation(() =>
                 new Promise(resolve => setTimeout(() => resolve({ data: {} }), 100))
             );
 
@@ -158,6 +159,38 @@ describe('GeminiService Error Handling', () => {
             // Should return error about missing key
             expect(result.text).toBeNull();
             expect(result.error).toContain('No API key');
+        });
+    });
+
+    describe('Model Fallback Logic', () => {
+        it('should strip thoughtSignature when falling back to non-reasoning models', async () => {
+            // Setup: Set current model to Gemini 3 Pro (supports signature)
+            await gemini.setModel('gemini-3-pro');
+
+            // Mock a previous thought signature
+            (gemini as any).lastThoughtSignature = 'test_signature';
+
+            // Mock 1st call (Gemini 3 Pro) failing with 500
+            // Mock 2nd call (Gemini 2.5 Pro) succeeding
+            (axios.post as jest.Mock)
+                .mockRejectedValueOnce({
+                    response: { status: 500, data: { error: { message: 'Server error' } } }
+                })
+                .mockResolvedValueOnce({
+                    data: { candidates: [{ content: { parts: [{ text: '{}' }] } }] }
+                });
+
+            await gemini.makeRequest('test_key', 'test prompt', {}, true);
+
+            expect(axios.post).toHaveBeenCalledTimes(2);
+
+            // 1st call (Gemini 3 Pro) should HAVE thoughtSignature
+            const firstCallBody = (axios.post as jest.Mock).mock.calls[0][1];
+            expect(firstCallBody.thoughtSignature).toBe('test_signature');
+
+            // 2nd call (Fallback to Gemini 2.5 Pro etc) should NOT have thoughtSignature
+            const secondCallBody = (axios.post as jest.Mock).mock.calls[1][1];
+            expect(secondCallBody.thoughtSignature).toBeUndefined();
         });
     });
 });

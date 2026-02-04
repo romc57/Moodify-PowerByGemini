@@ -117,7 +117,7 @@ describe('Full Flow Integration Tests (Real API)', () => {
                 60000
             );
 
-            recordResult('Step 1: Get vibe options', { isArray: true, minLength: true }, {
+            recordResult('Step 1: Get vibe options', { query: 'energetic workout music' }, { isArray: true, minLength: true }, {
                 isArray: Array.isArray(vibeOptions),
                 minLength: vibeOptions?.length > 0
             });
@@ -186,7 +186,7 @@ describe('Full Flow Integration Tests (Real API)', () => {
                 10000
             );
 
-            recordResult('Step 4: First track playing', {
+            recordResult('Step 4: First track playing', { urisPlayed: allUris.length, seedUri: seedTrack.uri }, {
                 hasState: true,
                 correctUri: seedTrack.uri,
                 correctTitle: seedTrack.title
@@ -211,9 +211,10 @@ describe('Full Flow Integration Tests (Real API)', () => {
             const expectedInQueue = fullTrackList.slice(1).map(t => t.uri);
             const matchCount = expectedInQueue.filter(uri => queueUris.includes(uri)).length;
 
-            recordResult('Step 5: Queue verification', {
+            recordResult('Step 5: Queue verification', { expectedInQueueCount: expectedInQueue.length, fullTrackListCount: fullTrackList.length }, {
                 hasQueue: true,
-                containsExpectedTracks: true
+                containsExpectedTracks: true,
+                queueLengthAtLeastExpected: true
             }, {
                 hasQueue: queueUris.length > 0,
                 queueLength: queueUris.length,
@@ -222,6 +223,7 @@ describe('Full Flow Integration Tests (Real API)', () => {
                 expectedCount: expectedInQueue.length
             });
 
+            expect(queueUris.length).toBeGreaterThanOrEqual(expectedInQueue.length);
             console.log(`[Info] Queue has ${queueUris.length} tracks, ${matchCount}/${expectedInQueue.length} match expected`);
 
             // Step 6: Test skip functionality
@@ -234,7 +236,7 @@ describe('Full Flow Integration Tests (Real API)', () => {
 
                 const trackChanged = beforeState?.uri !== afterState?.uri;
 
-                recordResult(`Step 6.${i}: Skip ${i}`, { trackChanged: true }, {
+                recordResult(`Step 6.${i}: Skip ${i}`, { skipIndex: i }, { trackChanged: true }, {
                     trackChanged,
                     before: beforeState?.title,
                     after: afterState?.title
@@ -287,7 +289,7 @@ describe('Full Flow Integration Tests (Real API)', () => {
             await spotifyRemote.play(initialTracks.map(t => t.uri));
             await sleep(3000);
 
-            recordResult('Step 1: Initial vibe playing', { isPlaying: true }, {
+            recordResult('Step 1: Initial vibe playing', { vibeQuery: 'chill relaxing music', trackCount: initialTracks.length }, { isPlaying: true }, {
                 isPlaying: true,
                 trackCount: initialTracks.length
             });
@@ -323,7 +325,7 @@ describe('Full Flow Integration Tests (Real API)', () => {
                 60000
             );
 
-            recordResult('Step 3: Rescue vibe generated', {
+            recordResult('Step 3: Rescue vibe generated', { skippedTracksCount: skippedTracks.length }, {
                 hasItems: true,
                 hasVibeName: true
             }, {
@@ -365,7 +367,7 @@ describe('Full Flow Integration Tests (Real API)', () => {
             const rescueUris = rescueTracks.map(t => t.uri);
             const inQueue = rescueUris.filter(uri => queueUris.includes(uri)).length;
 
-            recordResult('Step 5: Rescue queue', { hasRescueTracks: true }, {
+            recordResult('Step 5: Rescue queue', { rescueUrisCount: rescueUris.length }, { hasRescueTracks: true }, {
                 hasRescueTracks: inQueue > 0,
                 rescueTracksInQueue: inQueue,
                 totalRescueTracks: rescueUris.length,
@@ -461,19 +463,23 @@ describe('Full Flow Integration Tests (Real API)', () => {
             const oldTracksInQueue = queue2Uris.filter((uri: string) => tracks1Uris.has(uri) && !tracks2Uris.has(uri)).length;
             const newTracksInQueue = queue2Uris.filter((uri: string) => tracks2Uris.has(uri)).length;
 
-            recordResult('Step 3: Queue replaced', {
+            const expectedQueueLength = tracks2.length - 1;
+            recordResult('Step 3: Queue replaced', { firstVibeTracks: tracks1.length, secondVibeTracks: tracks2.length }, {
                 noOldTracks: true,
-                hasNewTracks: true
+                hasNewTracks: true,
+                queueLengthAtLeastExpected: true
             }, {
                 noOldTracks: oldTracksInQueue === 0,
                 oldTracksInQueue,
                 hasNewTracks: newTracksInQueue > 0,
                 newTracksInQueue,
-                totalQueueLength: queue2Uris.length
+                totalQueueLength: queue2Uris.length,
+                expectedQueueLength
             });
 
             expect(oldTracksInQueue).toBe(0);
             expect(newTracksInQueue).toBeGreaterThan(0);
+            expect(queue2Uris.length).toBeGreaterThanOrEqual(expectedQueueLength);
 
         }, 180000);
     });

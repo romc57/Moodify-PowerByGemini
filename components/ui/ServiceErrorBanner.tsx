@@ -119,11 +119,6 @@ function ErrorBannerItem({ error, onDismiss }: { error: ServiceError; onDismiss:
                 <Ionicons name={iconName} size={16} color={colors.icon} />
             </View>
 
-            import {router} from 'expo-router';
-
-            // ... (existing imports)
-
-            // Inside ErrorBannerItem before content container:
             {/* Action Button */}
             {error.actionLabel && (
                 <Pressable
@@ -141,8 +136,6 @@ function ErrorBannerItem({ error, onDismiss }: { error: ServiceError; onDismiss:
                     <Text style={styles.actionButtonText}>{error.actionLabel}</Text>
                 </Pressable>
             )}
-
-            {/* Content */}
 
             {/* Content */}
             <View style={styles.contentContainer}>

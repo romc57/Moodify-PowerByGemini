@@ -62,7 +62,7 @@ export const AnimatedPlayButton: React.FC<AnimatedPlayButtonProps> = ({
       pulseScale.value = withTiming(1, { duration: 300 });
       pulseOpacity.value = withTiming(0.2, { duration: 300 });
     }
-  }, [isPlaying]);
+  }, [isPlaying, pulseScale, pulseOpacity]);
 
   const handlePressIn = () => {
     scale.value = withSpring(0.9, { damping: 15, stiffness: 400 });

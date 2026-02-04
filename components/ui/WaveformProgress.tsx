@@ -57,7 +57,7 @@ const WaveformBar: React.FC<{
     } else {
       heightValue.value = withTiming(0.3, { duration: 400 });
     }
-  }, [isPlaying, isActive]);
+  }, [isPlaying, isActive, heightValue, seed]);
 
   const barStyle = useAnimatedStyle(() => ({
     height: `${heightValue.value * 100}%`,

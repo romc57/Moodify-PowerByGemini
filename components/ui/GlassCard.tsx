@@ -10,7 +10,6 @@ import { Platform, StyleSheet, View, ViewStyle } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
 } from 'react-native-reanimated';
 
 interface GlassCardProps {

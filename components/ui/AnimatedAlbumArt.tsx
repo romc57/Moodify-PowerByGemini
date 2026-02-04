@@ -60,7 +60,7 @@ export const AnimatedAlbumArt: React.FC<AnimatedAlbumArtProps> = ({
       glowOpacity.value = withTiming(0.2, { duration: 500 });
       imageScale.value = withSpring(0.95, { damping: 15 });
     }
-  }, [isPlaying]);
+  }, [isPlaying, glowScale, glowOpacity, imageScale]);
 
   const glowStyle = useAnimatedStyle(() => ({
     transform: [{ scale: glowScale.value }],

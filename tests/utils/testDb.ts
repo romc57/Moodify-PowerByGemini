@@ -89,6 +89,78 @@ async function tryRefreshSpotifyToken(clientId: string, refreshToken: string): P
     return null;
 }
 
+/** Spotify-only session check: set tokens from env, call /v1/me, on 401 refresh and retry once. */
+async function checkSpotifySessionOnly(keys: ReturnType<typeof loadTestApiKeys>): Promise<{ active: boolean; errors: string[] }> {
+    const errors: string[] = [];
+    if (!keys.spotifyAccessToken || keys.spotifyAccessToken === 'your_spotify_access_token_here') {
+        errors.push('Spotify: No access token in .env.test');
+        return { active: false, errors };
+    }
+    try {
+        const clientId = keys.spotifyClientId || (process.env.SPOTIFY_CLIENT_ID?.trim() && process.env.SPOTIFY_CLIENT_ID !== 'your_spotify_client_id_here' ? process.env.SPOTIFY_CLIENT_ID.trim() : null);
+        if (clientId) await dbService.setPreference('spotify_client_id', clientId);
+        let refreshToken = keys.spotifyRefreshToken || (process.env.SPOTIFY_REFRESH_TOKEN?.trim() && process.env.SPOTIFY_REFRESH_TOKEN !== 'your_spotify_refresh_token_here' ? process.env.SPOTIFY_REFRESH_TOKEN.trim() : null);
+        if (!refreshToken) refreshToken = await dbService.getRefreshToken('spotify');
+        await dbService.setServiceToken('spotify', keys.spotifyAccessToken, refreshToken || undefined);
+        const accessTokenFromDb = await dbService.getServiceToken('spotify');
+        if (!accessTokenFromDb) {
+            errors.push('Spotify: Access token not found in database after setting');
+            return { active: false, errors };
+        }
+        const maxRetries = 3;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const response = await axios.get('https://api.spotify.com/v1/me', {
+                    headers: { Authorization: `Bearer ${accessTokenFromDb}` },
+                    timeout: 15000
+                });
+                if (response.status === 200) return { active: true, errors: [] };
+                errors.push('Spotify: No active session (unexpected status: ' + response.status + ')');
+                return { active: false, errors };
+            } catch (apiError: any) {
+                const isNetworkError = apiError.message === 'Network Error' || apiError.code === 'ECONNRESET' || apiError.code === 'ETIMEDOUT' || apiError.code === 'ECONNABORTED';
+                if (isNetworkError && attempt < maxRetries) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
+                if (apiError.response?.status === 401) {
+                    const cid = keys.spotifyClientId || (await dbService.getPreference('spotify_client_id'));
+                    const ref = keys.spotifyRefreshToken || (await dbService.getRefreshToken('spotify'));
+                    if (cid && ref) {
+                        const newToken = await tryRefreshSpotifyToken(cid, ref);
+                        if (newToken) {
+                            const retry = await axios.get('https://api.spotify.com/v1/me', { headers: { Authorization: `Bearer ${newToken}` }, timeout: 10000 });
+                            if (retry.status === 200) return { active: true, errors: [] };
+                        }
+                    }
+                    errors.push('Spotify: No active session (token expired, refresh failed or no refresh token)');
+                } else if (apiError.response?.status === 403) {
+                    errors.push('Spotify: No active session (insufficient permissions)');
+                } else {
+                    errors.push(`Spotify: Cannot verify session (${apiError.message || 'Network error'})`);
+                }
+                return { active: false, errors };
+            }
+        }
+    } catch (error: any) {
+        errors.push(`Spotify: ${error.message || 'Cannot check session'}`);
+    }
+    return { active: false, errors };
+}
+
+/**
+ * Ensure Spotify has an active session (set tokens from env, call /v1/me, on 401 refresh and retry).
+ * Single place for "ensure Spotify session" in tests. Throws if not active.
+ */
+export async function ensureSpotifySessionOrThrow(): Promise<void> {
+    const keys = loadTestApiKeys();
+    const { active, errors } = await checkSpotifySessionOnly(keys);
+    if (!active) {
+        const msg = errors.length ? errors.join('; ') : 'No active Spotify session. Set SPOTIFY_ACCESS_TOKEN (and SPOTIFY_REFRESH_TOKEN) in .env.test.';
+        throw new Error(msg);
+    }
+}
+
 /**
  * Check if we have active sessions with both Gemini and Spotify.
  * For Spotify: if /v1/me returns 401, tries token refresh once then re-checks.
@@ -123,111 +195,11 @@ export async function hasActiveSessions(): Promise<{ hasActiveGemini: boolean; h
         errors.push('Gemini: No API key in .env.test');
     }
 
-    // Check Spotify session - try to make a real API call (app logic: services read from DB)
-    if (keys.spotifyAccessToken && keys.spotifyAccessToken !== 'your_spotify_access_token_here') {
-        console.log('[TestUtils] [Spotify] Access token found in .env.test');
-        try {
-            const clientId = keys.spotifyClientId || (process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_ID.trim() && process.env.SPOTIFY_CLIENT_ID !== 'your_spotify_client_id_here' ? process.env.SPOTIFY_CLIENT_ID.trim() : null);
-            if (clientId) {
-                console.log('[TestUtils] [Spotify] Setting client ID in database...');
-                await dbService.setPreference('spotify_client_id', clientId);
-            }
-            let refreshToken = keys.spotifyRefreshToken || (process.env.SPOTIFY_REFRESH_TOKEN && process.env.SPOTIFY_REFRESH_TOKEN.trim() && process.env.SPOTIFY_REFRESH_TOKEN !== 'your_spotify_refresh_token_here' ? process.env.SPOTIFY_REFRESH_TOKEN.trim() : null);
-            if (!refreshToken) {
-                console.log('[TestUtils] [Spotify] No refresh token in .env.test, checking database...');
-                refreshToken = await dbService.getRefreshToken('spotify');
-            } else {
-                console.log('[TestUtils] [Spotify] Refresh token found in .env.test');
-            }
-            console.log('[TestUtils] [Spotify] Setting access token in database...');
-            await dbService.setServiceToken('spotify', keys.spotifyAccessToken, refreshToken || undefined);
-            
-            const accessTokenFromDb = await dbService.getServiceToken('spotify');
-            if (accessTokenFromDb) {
-                console.log('[TestUtils] [Spotify] Access token retrieved from database, testing connection...');
-
-                // Retry logic for network errors
-                const maxRetries = 3;
-                for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                    try {
-                        console.log(`[TestUtils] [Spotify] Making test API call to Spotify /v1/me (attempt ${attempt}/${maxRetries})...`);
-                        const response = await axios.get('https://api.spotify.com/v1/me', {
-                            headers: { Authorization: `Bearer ${accessTokenFromDb}` },
-                            timeout: 15000
-                        });
-                        hasActiveSpotify = response.status === 200;
-                        if (hasActiveSpotify) {
-                            console.log('[TestUtils] ✓ Active Spotify session confirmed - API call successful (status: 200)');
-                            break; // Success, exit retry loop
-                        } else {
-                            console.error(`[TestUtils] ✗ Spotify session inactive - unexpected status: ${response.status}`);
-                            errors.push('Spotify: No active session (unexpected status: ' + response.status + ')');
-                            break; // Non-network error, don't retry
-                        }
-                    } catch (apiError: any) {
-                        const isNetworkError = apiError.message === 'Network Error' ||
-                            apiError.code === 'ECONNRESET' ||
-                            apiError.code === 'ETIMEDOUT' ||
-                            apiError.code === 'ECONNABORTED';
-
-                        if (isNetworkError && attempt < maxRetries) {
-                            console.warn(`[TestUtils] [Spotify] Network error on attempt ${attempt}, retrying in 2s...`);
-                            await new Promise(r => setTimeout(r, 2000));
-                            continue; // Retry
-                        }
-
-                        const status = apiError.response?.status;
-                        const message = apiError.message || 'Network error';
-                        const responseData = apiError.response?.data ? JSON.stringify(apiError.response.data) : 'none';
-                        console.error('[TestUtils] Spotify /v1/me failed - full detail:', { status, message, responseData, stack: apiError.stack });
-
-                        if (status === 401) {
-                            const clientId = keys.spotifyClientId || (await dbService.getPreference('spotify_client_id'));
-                            const refreshToken = keys.spotifyRefreshToken || (await dbService.getRefreshToken('spotify'));
-                            console.error('[TestUtils] Spotify 401 - clientId present:', !!clientId, 'refreshToken present:', !!refreshToken);
-                            if (clientId && refreshToken) {
-                                console.log('[TestUtils] [Spotify] Token expired (401), attempting refresh...');
-                                const newToken = await tryRefreshSpotifyToken(clientId, refreshToken);
-                                if (newToken) {
-                                    const retry = await axios.get('https://api.spotify.com/v1/me', {
-                                        headers: { Authorization: `Bearer ${newToken}` },
-                                        timeout: 10000
-                                    });
-                                    if (retry.status === 200) {
-                                        hasActiveSpotify = true;
-                                        console.log('[TestUtils] ✓ Spotify session restored after token refresh');
-                                    } else {
-                                        console.error('[TestUtils] Retry after refresh status:', retry.status);
-                                    }
-                                } else {
-                                    console.error('[TestUtils] tryRefreshSpotifyToken returned null - refresh failed');
-                                }
-                            } else {
-                                console.error('[TestUtils] Cannot refresh: need SPOTIFY_CLIENT_ID and SPOTIFY_REFRESH_TOKEN in .env.test');
-                            }
-                            if (!hasActiveSpotify) {
-                                errors.push('Spotify: No active session (token expired, refresh failed or no refresh token)');
-                            }
-                        } else if (status === 403) {
-                            errors.push('Spotify: No active session (insufficient permissions)');
-                        } else {
-                            errors.push(`Spotify: Cannot verify session (${message})`);
-                        }
-                        break; // Exit retry loop on non-retryable errors
-                    }
-                } // end for loop
-            } else {
-                console.error('[TestUtils] ✗ Spotify access token not found in database after setting');
-                errors.push('Spotify: Access token not found in database after setting');
-            }
-        } catch (error: any) {
-            console.error('[TestUtils] Spotify session check exception - full detail:', error.message, error.response?.data, error.stack || '');
-            errors.push(`Spotify: ${error.message || 'Cannot check session'}`);
-        }
-    } else {
-        console.error('[TestUtils] Spotify: No access token. process.env.SPOTIFY_ACCESS_TOKEN present:', !!process.env.SPOTIFY_ACCESS_TOKEN, 'keys.spotifyAccessToken:', !!keys.spotifyAccessToken);
-        errors.push('Spotify: No access token in .env.test');
-    }
+    // Check Spotify session - single path via checkSpotifySessionOnly (set tokens, /v1/me, on 401 refresh)
+    console.log('[TestUtils] [Spotify] Checking session...');
+    const spotifyResult = await checkSpotifySessionOnly(keys);
+    hasActiveSpotify = spotifyResult.active;
+    errors.push(...spotifyResult.errors);
 
     console.log('[TestUtils] ========================================');
     if (hasActiveGemini && hasActiveSpotify) {

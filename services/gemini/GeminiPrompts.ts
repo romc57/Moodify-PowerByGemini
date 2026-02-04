@@ -37,12 +37,12 @@ Rules:NEVER suggest songs from H list,popular,no mega-hits
     userInstruction: string,
     excludeTracks: string[] = []
   ) => {
-    const historyCompact = recentHistory.slice(0, 8).map((h: any) =>
-      `${h.track_name}|${h.artist_name}`
-    ).join(';');
+    const historyCompact = recentHistory.length > 0
+      ? recentHistory.slice(0, 8).map((h: any) => `${h.track_name}|${h.artist_name}`).join(';')
+      : 'None';
 
-    const favCompact = favorites.slice(0, 5).join(';');
-    const excludeCompact = excludeTracks.slice(0, 30).join(';');
+    const favCompact = favorites.length > 0 ? favorites.slice(0, 5).join(';') : 'Any';
+    const excludeCompact = excludeTracks.length > 0 ? excludeTracks.slice(0, 30).join(';') : 'None';
 
     return `JSON. 16 vibe options with POPULAR Spotify tracks.
 H:${historyCompact}

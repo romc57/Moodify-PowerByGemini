@@ -1,0 +1,999 @@
+
+> moodify-mobile@1.0.0 test
+> jest tests/integration/GeminiSpotifyIntegration.test.ts
+
+  console.log
+    [jest-env-setup] Loaded .env.test file
+
+      at Object.<anonymous> (jest-env-setup.js:9:11)
+
+  console.log
+    [jest-env-setup] Found 5 environment variables in .env.test
+
+      at Object.<anonymous> (jest-env-setup.js:11:11)
+
+  console.log
+    [SpotifyRemote] Initializing Service...
+
+      at Function.log [as getInstance] (services/spotify/SpotifyRemoteService.ts:81:21)
+
+  console.log
+    [Database] Initialized with New Schema
+
+      at DatabaseService.log (services/database/DatabaseService.native.ts:115:17)
+
+  console.log
+    [Database] New Day - Clearing Daily Log
+
+      at DatabaseService.log (services/database/DatabaseService.native.ts:130:25)
+
+  console.log
+    [Integration] Initializing test database...
+
+      at Object.log (tests/integration/GeminiSpotifyIntegration.test.ts:36:17)
+
+  console.log
+    [Gemini] Gemini 2.5 Pro: Available (1383ms)
+
+      at GeminiService.log (services/gemini/GeminiService.ts:138:21)
+
+  console.log
+    [TestUtils] [Spotify] Checking session...
+
+      at log (tests/utils/testDb.ts:199:13)
+
+  console.log
+    [TestUtils] ========================================
+
+      at log (tests/utils/testDb.ts:204:13)
+
+  console.log
+    [TestUtils] ✓✓✓ Both Gemini and Spotify have active sessions ✓✓✓
+
+      at log (tests/utils/testDb.ts:206:17)
+
+  console.log
+    [TestUtils] ✓✓✓ Tests will run with real API calls ✓✓✓
+
+      at log (tests/utils/testDb.ts:207:17)
+
+  console.log
+    [TestUtils] ========================================
+
+      at log (tests/utils/testDb.ts:218:13)
+
+  console.log
+
+
+      at log (tests/utils/testDb.ts:219:13)
+
+  console.log
+    [Integration] Sessions active, ready for testing
+
+      at Object.log (tests/integration/GeminiSpotifyIntegration.test.ts:48:17)
+
+  console.log
+    [Test] Getting vibe options for: "happy upbeat music"
+
+      at Object.log (tests/integration/GeminiSpotifyIntegration.test.ts:63:21)
+
+  console.log
+    [waitForApiCall] Starting: API call (maxWait: 60000ms, retryInterval: 1000ms)
+
+      at log (tests/utils/testApiKeys.ts:174:13)
+
+  console.log
+    [SpotifyRemote] GET /me/top/tracks
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 369ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [RecService] Generating Vibe Options (Excluding 0 tracks)...
+
+      at RecommendationService.log (services/core/RecommendationService.ts:56:21)
+
+  console.log
+    [Gemini] Trying Gemini 2.5 Pro...
+
+      at GeminiService.log (services/gemini/GeminiService.ts:340:25)
+
+  console.log
+    [Gemini] Gemini 2.5 Pro responded in 27337ms
+
+      at GeminiService.log (services/gemini/GeminiService.ts:347:25)
+
+  console.log
+    [RecService] Gemini returned 0 raw options.
+
+      at RecommendationService.log (services/core/RecommendationService.ts:66:21)
+
+  console.warn
+    [RecService] Gemini returned no options.
+
+      67 |
+      68 |             if (!options || options.length === 0) {
+    > 69 |                 console.warn('[RecService] Gemini returned no options.');
+         |                         ^
+      70 |                 return [];
+      71 |             }
+      72 |
+
+      at RecommendationService.warn (services/core/RecommendationService.ts:69:25)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+  console.log
+    [waitForApiCall] Success: API call (27714ms, attempt 1)
+
+      at log (tests/utils/testApiKeys.ts:179:21)
+
+  console.log
+    
+    [TestData] ========== getVibeOptions ==========
+
+      at log (tests/utils/testApiKeys.ts:205:13)
+
+  console.log
+    [TestData] PASSED (input): {
+      "query": "happy upbeat music"
+    }
+
+      at log (tests/utils/testApiKeys.ts:206:13)
+
+  console.log
+    [TestData] EXPECTED: {
+      "isArray": true,
+      "minLength": 1,
+      "hasValidUris": true
+    }
+
+      at log (tests/utils/testApiKeys.ts:207:13)
+
+  console.log
+    [TestData] GOT: {
+      "isArray": true,
+      "length": 0,
+      "hasValidUris": true,
+      "tracks": []
+    }
+
+      at log (tests/utils/testApiKeys.ts:208:13)
+
+  console.log
+    [TestData] ========================================
+
+      at log (tests/utils/testApiKeys.ts:209:13)
+
+  console.log
+    [Test] Testing backfill with: "experimental avant-garde jazz fusion"
+
+      at Object.log (tests/integration/GeminiSpotifyIntegration.test.ts:115:21)
+
+  console.log
+    [waitForApiCall] Starting: API call (maxWait: 60000ms, retryInterval: 1000ms)
+
+      at log (tests/utils/testApiKeys.ts:174:13)
+
+  console.log
+    [SpotifyRemote] GET /me/top/tracks
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 383ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [RecService] Generating Vibe Options (Excluding 0 tracks)...
+
+      at RecommendationService.log (services/core/RecommendationService.ts:56:21)
+
+  console.log
+    [Gemini] Trying Gemini 2.5 Pro...
+
+      at GeminiService.log (services/gemini/GeminiService.ts:340:25)
+
+  console.log
+    [Gemini] Gemini 2.5 Pro responded in 30147ms
+
+      at GeminiService.log (services/gemini/GeminiService.ts:347:25)
+
+  console.log
+    [RecService] Gemini returned 16 raw options.
+
+      at RecommendationService.log (services/core/RecommendationService.ts:66:21)
+
+  console.log
+    [ValidatedQueue] Validating 16 vibe options, target: 8 minimum
+
+      at ValidatedQueueService.log (services/core/ValidatedQueueService.ts:677:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 759ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Juicy" by "The Notorious B.I.G.": "Juicy" by "The Notorious B.I.G." (score: 90, reasons: exact_title, exact_artist)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 752ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "DÁKITI" by "Bad Bunny & Jhayco": "DÁKITI" by "Bad Bunny" (score: 85, reasons: exact_title, artist_contains, high_popularity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 752ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Like a Prayer" by "Madonna": "Like a Prayer" by "Madonna" (score: 100, reasons: exact_title, exact_artist, high_popularity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 771ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Redbone" by "Childish Gambino": "Redbone" by "Childish Gambino" (score: 100, reasons: exact_title, exact_artist, high_popularity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 774ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Bitches Brew" by "Miles Davis": "Bitches Brew" by "Miles Davis" (score: 90, reasons: exact_title, exact_artist)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 754ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Myth" by "Beach House": "Myth" by "Beach House" (score: 90, reasons: exact_title, exact_artist)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 775ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Karma Police" by "Radiohead": "Karma Police" by "Radiohead" (score: 100, reasons: exact_title, exact_artist, high_popularity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 766ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Exact query failed for "Don't You Worry Child", trying loose search
+
+      at ValidatedQueueService.log (services/core/ValidatedQueueService.ts:326:21)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 784ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "September" by "Earth, Wind & Fire": "September" by "Earth, Wind & Fire" (score: 100, reasons: exact_title, exact_artist, high_popularity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 790ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Holocene" by "Bon Iver": "Holocene" by "Bon Iver" (score: 95, reasons: exact_title, exact_artist)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 784ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Fast Car" by "Tracy Chapman": "Fast Car" by "Tracy Chapman" (score: 100, reasons: exact_title, exact_artist, high_popularity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 808ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "סתלבט בקיבוץ" by "Full Trunk": "סתלבט בקיבוץ" by "Full Trunk" (score: 95, reasons: exact_title, exact_artist)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 810ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Time" by "Hans Zimmer": "Time" by "Hans Zimmer" (score: 100, reasons: exact_title, exact_artist, high_popularity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 816ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "As It Was" by "Harry Styles": "As It Was" by "Harry Styles" (score: 100, reasons: exact_title, exact_artist, high_popularity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 810ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Someone Like You" by "Adele": "Someone Like You" by "Adele" (score: 100, reasons: exact_title, exact_artist, high_popularity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 803ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Paint It, Black" by "The Rolling Stones": "Paint It, Black" by "The Rolling Stones" (score: 100, reasons: exact_title, exact_artist, high_popularity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 1224ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Don't You Worry Child" by "Swedish House Mafia ft. John Martin": "Don't You Worry Child" by "Swedish House Mafia" (score: 85, reasons: exact_title, high_artist_similarity)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [ValidatedQueue] Returning 16 validated vibe options
+
+      at ValidatedQueueService.log (services/core/ValidatedQueueService.ts:687:21)
+
+  console.log
+    [RecService] ValidatedQueueService returned 8 (Strict: 8) options.
+
+      at RecommendationService.log (services/core/RecommendationService.ts:79:21)
+
+  console.log
+    [waitForApiCall] Success: API call (32552ms, attempt 1)
+
+      at log (tests/utils/testApiKeys.ts:179:21)
+
+  console.log
+    
+    [TestData] ========== getVibeOptions (backfill test) ==========
+
+      at log (tests/utils/testApiKeys.ts:205:13)
+
+  console.log
+    [TestData] PASSED (input): {
+      "query": "experimental avant-garde jazz fusion"
+    }
+
+      at log (tests/utils/testApiKeys.ts:206:13)
+
+  console.log
+    [TestData] EXPECTED: {
+      "isArray": true,
+      "allTracksHaveUri": true
+    }
+
+      at log (tests/utils/testApiKeys.ts:207:13)
+
+  console.log
+    [TestData] GOT: {
+      "isArray": true,
+      "length": 8,
+      "allTracksHaveUri": true
+    }
+
+      at log (tests/utils/testApiKeys.ts:208:13)
+
+  console.log
+    [TestData] ========================================
+
+      at log (tests/utils/testApiKeys.ts:209:13)
+
+  console.log
+    [Test] Testing no duplicates for: "pop music hits"
+
+      at Object.log (tests/integration/GeminiSpotifyIntegration.test.ts:144:21)
+
+  console.log
+    [waitForApiCall] Starting: API call (maxWait: 60000ms, retryInterval: 1000ms)
+
+      at log (tests/utils/testApiKeys.ts:174:13)
+
+  console.log
+    [SpotifyRemote] GET /me/top/tracks
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 432ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [RecService] Generating Vibe Options (Excluding 0 tracks)...
+
+      at RecommendationService.log (services/core/RecommendationService.ts:56:21)
+
+  console.log
+    [Gemini] Trying Gemini 2.5 Pro...
+
+      at GeminiService.log (services/gemini/GeminiService.ts:340:25)
+
+  console.log
+    [Gemini] Gemini 2.5 Pro responded in 31627ms
+
+      at GeminiService.log (services/gemini/GeminiService.ts:347:25)
+
+  console.log
+    [RecService] Gemini returned 0 raw options.
+
+      at RecommendationService.log (services/core/RecommendationService.ts:66:21)
+
+  console.warn
+    [RecService] Gemini returned no options.
+
+      67 |
+      68 |             if (!options || options.length === 0) {
+    > 69 |                 console.warn('[RecService] Gemini returned no options.');
+         |                         ^
+      70 |                 return [];
+      71 |             }
+      72 |
+
+      at RecommendationService.warn (services/core/RecommendationService.ts:69:25)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+  console.log
+    [waitForApiCall] Success: API call (32062ms, attempt 1)
+
+      at log (tests/utils/testApiKeys.ts:179:21)
+
+  console.log
+    
+    [TestData] ========== getVibeOptions (no duplicates) ==========
+
+      at log (tests/utils/testApiKeys.ts:205:13)
+
+  console.log
+    [TestData] PASSED (input): {
+      "query": "pop music hits"
+    }
+
+      at log (tests/utils/testApiKeys.ts:206:13)
+
+  console.log
+    [TestData] EXPECTED: {
+      "noDuplicates": true
+    }
+
+      at log (tests/utils/testApiKeys.ts:207:13)
+
+  console.log
+    [TestData] GOT: {
+      "totalUris": 0,
+      "uniqueUris": 0,
+      "hasDuplicates": false
+    }
+
+      at log (tests/utils/testApiKeys.ts:208:13)
+
+  console.log
+    [TestData] ========================================
+
+      at log (tests/utils/testApiKeys.ts:209:13)
+
+  console.log
+    [Test] Validating Gemini suggestion against Spotify...
+
+      at Object.log (tests/integration/GeminiSpotifyIntegration.test.ts:176:21)
+
+  console.log
+    [waitForApiCall] Starting: API call (maxWait: 60000ms, retryInterval: 1000ms)
+
+      at log (tests/utils/testApiKeys.ts:174:13)
+
+  console.log
+    [Gemini] Trying Gemini 2.5 Pro...
+
+      at GeminiService.log (services/gemini/GeminiService.ts:340:25)
+
+  console.log
+    [Gemini] Gemini 2.5 Pro responded in 29134ms
+
+      at GeminiService.log (services/gemini/GeminiService.ts:347:25)
+
+  console.log
+    [waitForApiCall] Success: API call (29135ms, attempt 1)
+
+      at log (tests/utils/testApiKeys.ts:179:21)
+
+  console.warn
+    [Test] No options returned from Gemini, skipping validation
+
+      183 |
+      184 |             if (!options || options.length === 0) {
+    > 185 |                 console.warn('[Test] No options returned from Gemini, skipping validation');
+          |                         ^
+      186 |                 return;
+      187 |             }
+      188 |
+
+      at Object.warn (tests/integration/GeminiSpotifyIntegration.test.ts:185:25)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 396ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Exact query failed for "Completely Fake Song Title XYZ123", trying loose search
+
+      at ValidatedQueueService.log (services/core/ValidatedQueueService.ts:326:21)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 559ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Completely Fake Song Title XYZ123" by "NonExistent Artist ABC789": "Completely" by "Dark Queen$" (score: 30, reasons: title_contains)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [ValidatedQueue] Score 30 below threshold 65
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:258:21)
+
+  console.log
+    [ValidatedQueue] No match found for: Completely Fake Song Title XYZ123 by NonExistent Artist ABC789
+
+      at ValidatedQueueService.log (services/core/ValidatedQueueService.ts:353:21)
+
+  console.log
+    
+    [TestData] ========== validateTrack (non-existent) ==========
+
+      at log (tests/utils/testApiKeys.ts:205:13)
+
+  console.log
+    [TestData] PASSED (input): {
+      "suggestion": {
+        "title": "Completely Fake Song Title XYZ123",
+        "artist": "NonExistent Artist ABC789"
+      }
+    }
+
+      at log (tests/utils/testApiKeys.ts:206:13)
+
+  console.log
+    [TestData] EXPECTED: null
+
+      at log (tests/utils/testApiKeys.ts:207:13)
+
+  console.log
+    [TestData] GOT: null
+
+      at log (tests/utils/testApiKeys.ts:208:13)
+
+  console.log
+    [TestData] ========================================
+
+      at log (tests/utils/testApiKeys.ts:209:13)
+
+  console.log
+    [Test] Expanding vibe from: Blinding Lights by The Weeknd
+
+      at Object.log (tests/integration/GeminiSpotifyIntegration.test.ts:251:21)
+
+  console.log
+    [waitForApiCall] Starting: API call (maxWait: 60000ms, retryInterval: 1000ms)
+
+      at log (tests/utils/testApiKeys.ts:174:13)
+
+  console.log
+    [SpotifyRemote] GET /me/top/tracks
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 199ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [RecService] Expanding vibe from seed: Blinding Lights...
+
+      at RecommendationService.log (services/core/RecommendationService.ts:178:21)
+
+  console.log
+    [Gemini] Trying Gemini 2.5 Pro...
+
+      at GeminiService.log (services/gemini/GeminiService.ts:340:25)
+
+  console.log
+    [Gemini] Gemini 2.5 Pro responded in 21719ms
+
+      at GeminiService.log (services/gemini/GeminiService.ts:347:25)
+
+  console.error
+    [Gemini] JSON parse error: Unterminated string in JSON at position 502
+
+      216 |             return parsed;
+      217 |         } catch (error: any) {
+    > 218 |             console.error('[Gemini] JSON parse error:', error.message);
+          |                     ^
+      219 |
+      220 |             // Attempt repair for truncated arrays
+      221 |             const repairedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+
+      at GeminiService.error [as parseJsonResponse] (services/gemini/GeminiService.ts:218:21)
+      at GeminiService.parseJsonResponse (services/gemini/GeminiService.ts:534:33)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+  console.log
+    [ErrorStore] WARNING [gemini]: PARSE_ERROR - AI response was malformed. Retrying...
+
+      at Object.log [as setError] (stores/ErrorStore.ts:73:17)
+
+  console.error
+    [Gemini] Error: {
+      status: undefined,
+      message: 'Unterminated string in JSON at position 502'
+    }
+
+      259 |         const errorMessage = error.response?.data?.error?.message || error.message || '';
+      260 |
+    > 261 |         console.error('[Gemini] Error:', { status, message: errorMessage });
+          |                 ^
+      262 |
+      263 |         if (status === 400) {
+      264 |             if (errorMessage.includes('thoughtSignature') || errorMessage.includes('Invalid Argument')) {
+
+      at GeminiService.error [as handleGeminiError] (services/gemini/GeminiService.ts:261:17)
+      at GeminiService.handleGeminiError (services/gemini/GeminiService.ts:537:18)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+  console.log
+    [ErrorStore] ERROR [gemini]: UNKNOWN - AI encountered an error. Please try again.
+
+      at Object.log [as setError] (stores/ErrorStore.ts:73:17)
+
+  console.log
+    [waitForApiCall] Success: API call (21924ms, attempt 1)
+
+      at log (tests/utils/testApiKeys.ts:179:21)
+
+  console.log
+    
+    [TestData] ========== expandVibe ==========
+
+      at log (tests/utils/testApiKeys.ts:205:13)
+
+  console.log
+    [TestData] PASSED (input): {
+      "seedTrack": {
+        "title": "Blinding Lights",
+        "artist": "The Weeknd"
+      },
+      "vibeContext": "synth-pop retro vibes"
+    }
+
+      at log (tests/utils/testApiKeys.ts:206:13)
+
+  console.log
+    [TestData] EXPECTED: {
+      "hasItems": true,
+      "itemsHaveUris": true
+    }
+
+      at log (tests/utils/testApiKeys.ts:207:13)
+
+  console.log
+    [TestData] GOT: {
+      "hasItems": false,
+      "itemCount": 0,
+      "firstThree": []
+    }
+
+      at log (tests/utils/testApiKeys.ts:208:13)
+
+  console.log
+    [TestData] ========================================
+
+      at log (tests/utils/testApiKeys.ts:209:13)
+
+  console.log
+    [waitForApiCall] Starting: API call (maxWait: 30000ms, retryInterval: 1000ms)
+
+      at log (tests/utils/testApiKeys.ts:174:13)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 1006ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Test" by "Test": "The Beep Test: 20 Metre - Complete Test" by "The Beep Test" (score: 55, reasons: title_contains, artist_contains)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [ValidatedQueue] Score 55 below threshold 65
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:258:21)
+
+  console.log
+    [ValidatedQueue] Exact query failed for "Test", trying loose search
+
+      at ValidatedQueueService.log (services/core/ValidatedQueueService.ts:326:21)
+
+  console.log
+    [SpotifyRemote] GET /search
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:223:17)
+
+  console.log
+    [SpotifyRemote] Response (200): 435ms
+
+      at SpotifyRemoteService.log (services/spotify/SpotifyRemoteService.ts:227:21)
+
+  console.log
+    [ValidatedQueue] Best match for "Test" by "Test": "TEST & RECOGNIZE FUNK" by "ZMAJOR" (score: 35, reasons: title_contains)
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:252:17)
+
+  console.log
+    [ValidatedQueue] Score 35 below threshold 65
+
+      at ValidatedQueueService.log [as findBestMatch] (services/core/ValidatedQueueService.ts:258:21)
+
+  console.log
+    [ValidatedQueue] No match found for: Test by Test
+
+      at ValidatedQueueService.log (services/core/ValidatedQueueService.ts:353:21)
+
+  console.log
+    [waitForApiCall] Success: API call (1448ms, attempt 1)
+
+      at log (tests/utils/testApiKeys.ts:179:21)
+
+FAIL integration tests/integration/GeminiSpotifyIntegration.test.ts (147.852 s)
+  Gemini → Spotify Integration Tests (Real API)
+    Gemini Recommendation Flow
+      ✕ should get vibe options with valid Spotify URIs (27719 ms)
+      ✓ should handle backfill when suggestions fail validation (32555 ms)
+      ✓ should prevent duplicate tracks in results (32064 ms)
+    Track Validation
+      ✓ should validate real Gemini suggestions against Spotify (29136 ms)
+      ✓ should reject non-existent tracks (961 ms)
+    Expand Vibe Flow
+      ✕ should expand a seed track into related tracks (21927 ms)
+    Error Resilience
+      ✓ should handle network timeouts gracefully (1449 ms)
+
+  ● Gemini → Spotify Integration Tests (Real API) › Gemini Recommendation Flow › should get vibe options with valid Spotify URIs
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+      100 |
+      101 |             expect(Array.isArray(result)).toBe(true);
+    > 102 |             expect(result.length).toBeGreaterThan(0);
+          |                                   ^
+      103 |
+      104 |             result.forEach((option, idx) => {
+      105 |                 expect(option).toHaveProperty('track');
+
+      at Object.toBeGreaterThan (tests/integration/GeminiSpotifyIntegration.test.ts:102:35)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+  ● Gemini → Spotify Integration Tests (Real API) › Expand Vibe Flow › should expand a seed track into related tracks
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+      273 |
+      274 |             expect(result).toHaveProperty('items');
+    > 275 |             expect(result.items.length).toBeGreaterThan(0);
+          |                                         ^
+      276 |
+      277 |             result.items.forEach((track: any) => {
+      278 |                 if (track.uri) {
+
+      at Object.toBeGreaterThan (tests/integration/GeminiSpotifyIntegration.test.ts:275:41)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+
+========== FAILED TESTS SUMMARY ==========
+Total: 2 failed test(s) in 1 suite(s). Full error and stack below.
+
+Suite: tests/integration/GeminiSpotifyIntegration.test.ts
+  ✗ Gemini → Spotify Integration Tests (Real API) Gemini Recommendation Flow should get vibe options with valid Spotify URIs
+    Error: expect(received).toBeGreaterThan(expected)
+    
+    Expected: > 0
+    Received:   0
+        at Object.toBeGreaterThan (/home/rom/Projects/Moodify-PowerByGemini/tests/integration/GeminiSpotifyIntegration.test.ts:102:35)
+        at Generator.next (<anonymous>)
+        at asyncGeneratorStep (/home/rom/Projects/Moodify-PowerByGemini/node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+        at _next (/home/rom/Projects/Moodify-PowerByGemini/node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+        at processTicksAndRejections (node:internal/process/task_queues:95:5)
+
+  ✗ Gemini → Spotify Integration Tests (Real API) Expand Vibe Flow should expand a seed track into related tracks
+    Error: expect(received).toBeGreaterThan(expected)
+    
+    Expected: > 0
+    Received:   0
+        at Object.toBeGreaterThan (/home/rom/Projects/Moodify-PowerByGemini/tests/integration/GeminiSpotifyIntegration.test.ts:275:41)
+        at Generator.next (<anonymous>)
+        at asyncGeneratorStep (/home/rom/Projects/Moodify-PowerByGemini/node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+        at _next (/home/rom/Projects/Moodify-PowerByGemini/node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+        at processTicksAndRejections (node:internal/process/task_queues:95:5)
+
+======================================
+
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 5 passed, 7 total
+Snapshots:   0 total
+Time:        147.958 s
+Ran all test suites matching /tests\/integration\/GeminiSpotifyIntegration.test.ts/i.
+Jest did not exit one second after the test run has completed.
+
+'This usually means that there are asynchronous operations that weren't stopped in your tests. Consider running Jest with `--detectOpenHandles` to troubleshoot this issue.

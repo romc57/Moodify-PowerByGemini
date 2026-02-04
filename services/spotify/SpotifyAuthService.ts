@@ -1,58 +1,190 @@
-import { ResponseType, useAuthRequest } from 'expo-auth-session';
-import { useEffect, useState } from 'react';
+import { makeRedirectUri, ResponseType, useAuthRequest, AuthSessionResult } from 'expo-auth-session';
+import * as WebBrowser from 'expo-web-browser';
+import { useCallback, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import { dbService } from '../database';
 import { SPOTIFY_AUTH_ENDPOINT, SPOTIFY_TOKEN_URL } from './constants';
 
-// Spotify OAuth discovery document
+// Ensure auth session can complete on web
+WebBrowser.maybeCompleteAuthSession();
+
+// OAuth Discovery document
 const discovery = {
     authorizationEndpoint: SPOTIFY_AUTH_ENDPOINT,
     tokenEndpoint: SPOTIFY_TOKEN_URL,
 };
 
-// Create platform-specific redirect URI
-const getRedirectUri = (): string => {
-    if (Platform.OS === 'web') {
-        // For web, use 127.0.0.1 as configured in Spotify Developer Dashboard
-        return 'http://127.0.0.1:8081/callback';
-    }
-    // For native apps, use the custom scheme with callback path to avoid 404s
-    return 'moodifymobile://callback';
-};
+// Scopes required for the app
+const SPOTIFY_SCOPES = [
+    'user-read-email',
+    'user-read-playback-state',
+    'user-modify-playback-state',
+    'user-read-currently-playing',
+    'user-read-recently-played',
+    'user-top-read',
+    'playlist-read-private',
+    'playlist-read-collaborative',
+    'user-library-read',
+    'user-library-modify',
+    'streaming',
+];
 
 /**
- * Get Spotify Client ID from database (user-entered in settings)
+ * Get platform-specific redirect URI
+ */
+export function getRedirectUri(): string {
+    if (Platform.OS === 'web') {
+        return 'http://127.0.0.1:8081/callback';
+    }
+    // Native: use custom scheme for Android/iOS
+    return makeRedirectUri({
+        scheme: 'moodifymobile',
+        path: 'callback',
+        native: 'moodifymobile://callback',
+    });
+}
+
+/**
+ * Get Spotify Client ID from database
  */
 export async function getSpotifyClientId(): Promise<string> {
     const clientId = await dbService.getPreference('spotify_client_id');
     return clientId || '';
 }
 
-export const useSpotifyAuth = () => {
-    const [clientId, setClientId] = useState<string>('');
+/**
+ * Exchange authorization code for tokens
+ */
+export async function exchangeCodeForToken(
+    code: string,
+    codeVerifier: string,
+    clientId: string
+): Promise<{ success: boolean; error?: string }> {
+    try {
+        const redirectUri = getRedirectUri();
+        console.log('[SpotifyAuth] Exchanging code for token...');
 
-    // Load client ID from database on mount
+        const response = await fetch(SPOTIFY_TOKEN_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                client_id: clientId,
+                grant_type: 'authorization_code',
+                code,
+                redirect_uri: redirectUri,
+                code_verifier: codeVerifier,
+            }).toString(),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            console.error('[SpotifyAuth] Token exchange failed:', data);
+            return { success: false, error: data.error_description || data.error || 'Token exchange failed' };
+        }
+
+        if (data.access_token) {
+            await dbService.setServiceToken('spotify', data.access_token, data.refresh_token);
+            console.log('[SpotifyAuth] Tokens saved successfully');
+            return { success: true };
+        }
+
+        return { success: false, error: 'No access token in response' };
+    } catch (e: any) {
+        console.error('[SpotifyAuth] Exchange error:', e);
+        return { success: false, error: e.message || 'Network error' };
+    }
+}
+
+/**
+ * Process OAuth callback result from WebBrowser or deep link
+ */
+export async function processAuthResult(
+    result: AuthSessionResult | { url: string },
+    codeVerifier: string | undefined,
+    clientId: string
+): Promise<{ success: boolean; error?: string; cancelled?: boolean }> {
+    // Handle WebBrowser result types
+    if ('type' in result) {
+        if (result.type === 'cancel' || result.type === 'dismiss') {
+            return { success: false, cancelled: true };
+        }
+        if (result.type !== 'success' || !('url' in result)) {
+            return { success: false, error: 'Authentication did not complete' };
+        }
+    }
+
+    // Extract URL from result
+    const urlString = 'url' in result ? result.url : null;
+    if (!urlString) {
+        return { success: false, error: 'No callback URL received' };
+    }
+
+    try {
+        const url = new URL(urlString);
+        const code = url.searchParams.get('code');
+        const error = url.searchParams.get('error');
+
+        if (error) {
+            return { success: false, error: `Spotify error: ${error}` };
+        }
+
+        if (!code) {
+            return { success: false, error: 'No authorization code received' };
+        }
+
+        if (!codeVerifier) {
+            return { success: false, error: 'Missing code verifier' };
+        }
+
+        if (!clientId) {
+            return { success: false, error: 'Missing client ID' };
+        }
+
+        return await exchangeCodeForToken(code, codeVerifier, clientId);
+    } catch (e: any) {
+        return { success: false, error: e.message || 'Failed to process callback' };
+    }
+}
+
+// Auth state interface
+interface SpotifyAuthState {
+    isReady: boolean;
+    isLoading: boolean;
+    error: string | null;
+}
+
+// Auth hook return type
+interface UseSpotifyAuthReturn {
+    state: SpotifyAuthState;
+    login: () => Promise<{ success: boolean; error?: string; cancelled?: boolean }>;
+    clientId: string;
+}
+
+/**
+ * Hook for Spotify OAuth authentication
+ * Clean, unified interface for Android, iOS, and Web
+ */
+export function useSpotifyAuth(): UseSpotifyAuthReturn {
+    const [clientId, setClientId] = useState('');
+    const [state, setState] = useState<SpotifyAuthState>({
+        isReady: false,
+        isLoading: false,
+        error: null,
+    });
+
+    // Load client ID on mount
     useEffect(() => {
-        getSpotifyClientId().then(setClientId);
+        getSpotifyClientId().then((id) => {
+            setClientId(id);
+        });
     }, []);
 
-    // 1. Define Request - provide valid config even when clientId is empty
-    const [request, response, promptAsync] = useAuthRequest(
+    // Create auth request
+    const [request, , promptAsync] = useAuthRequest(
         {
-            clientId: clientId || 'placeholder', // Use placeholder to prevent null errors
-            scopes: [
-                'user-read-email',
-                'user-read-playback-state',
-                'user-modify-playback-state',
-                'user-read-currently-playing',
-                'user-read-recently-played',
-                'user-top-read',
-                'playlist-read-private',
-                'playlist-read-collaborative',
-                'user-library-read',
-                'user-library-modify',
-                'streaming' // Required for Web Playback SDK (may help with search too)
-            ],
+            clientId: clientId || 'placeholder',
+            scopes: SPOTIFY_SCOPES,
             usePKCE: true,
             responseType: ResponseType.Code,
             redirectUri: getRedirectUri(),
@@ -60,62 +192,54 @@ export const useSpotifyAuth = () => {
         discovery
     );
 
+    // Update ready state when request and clientId are available
     useEffect(() => {
-        // Redirect URI configured
-    }, [request]);
+        setState((s) => ({
+            ...s,
+            isReady: !!request && !!clientId,
+            error: !clientId ? 'Please enter your Spotify Client ID in settings' : null,
+        }));
+    }, [request, clientId]);
 
-    useEffect(() => {
-        if (response?.type === 'success') {
-            const { code } = response.params;
-            if (code && request?.codeVerifier) {
-                exchangeCodeForToken(code, request.codeVerifier, clientId);
-            }
+    // Login function - works across all platforms
+    const login = useCallback(async (): Promise<{ success: boolean; error?: string; cancelled?: boolean }> => {
+        if (!request || !clientId) {
+            return { success: false, error: 'Auth not ready. Please enter your Spotify Client ID.' };
         }
-    }, [response, clientId]);
 
-    const exchangeCodeForToken = async (code: string, codeVerifier: string, currentClientId: string) => {
+        setState((s) => ({ ...s, isLoading: true, error: null }));
+
         try {
-            const currentRedirectUri = getRedirectUri();
-            console.log('[SpotifyAuth] Token exchange using redirect URI:', currentRedirectUri);
+            console.log('[SpotifyAuth] Starting auth flow...');
+            console.log('[SpotifyAuth] Redirect URI:', getRedirectUri());
 
-            const tokenResponse = await fetch(discovery.tokenEndpoint, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: new URLSearchParams({
-                    client_id: currentClientId,
-                    grant_type: 'authorization_code',
-                    code,
-                    redirect_uri: currentRedirectUri,
-                    code_verifier: codeVerifier,
-                }).toString(),
-            });
+            // Use WebBrowser.openAuthSessionAsync for proper handling across platforms
+            // On Android: Uses Chrome Custom Tabs (keeps app in memory)
+            // On iOS: Uses ASWebAuthenticationSession
+            // On Web: Opens popup window
+            const result = await WebBrowser.openAuthSessionAsync(
+                request.url,
+                getRedirectUri()
+            );
 
-            if (!tokenResponse.ok) {
-                const errorText = await tokenResponse.text();
-                console.error('[SpotifyAuth] Token response not OK:', tokenResponse.status, errorText);
-                return;
-            }
+            console.log('[SpotifyAuth] Auth result type:', result.type);
 
-            let data;
-            try {
-                data = await tokenResponse.json();
-            } catch (parseError) {
-                console.error('[SpotifyAuth] Failed to parse token response JSON', parseError);
-                return;
-            }
+            const authResult = await processAuthResult(result, request.codeVerifier, clientId);
 
-            if (data.access_token) {
-                await dbService.setServiceToken('spotify', data.access_token, data.refresh_token);
-                // Token stored successfully
-            } else {
-                console.error('[SpotifyAuth] Failed to exchange code', data);
-            }
-        } catch (e) {
-            console.error('[SpotifyAuth] Exchange Error', e);
+            setState((s) => ({
+                ...s,
+                isLoading: false,
+                error: authResult.error || null,
+            }));
+
+            return authResult;
+        } catch (e: any) {
+            console.error('[SpotifyAuth] Login error:', e);
+            const error = e.message || 'Login failed';
+            setState((s) => ({ ...s, isLoading: false, error }));
+            return { success: false, error };
         }
-    };
+    }, [request, clientId]);
 
-    return { request, promptAsync };
-};
+    return { state, login, clientId };
+}

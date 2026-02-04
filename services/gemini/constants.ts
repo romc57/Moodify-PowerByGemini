@@ -3,11 +3,73 @@
  * One source of truth for Gemini API configuration
  */
 
-export const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent';
+export type ModelId = 'gemini-3-pro' | 'gemini-2.5-pro' | 'gemini-2.0-flash' | 'gemini-2.5-flash';
+
+export interface GeminiModel {
+    id: ModelId;
+    name: string;
+    description: string;
+    url: string;
+    maxOutputTokens: number;
+    tier: 'pro' | 'flash';
+}
+
+// Token limits for different operation types (halved from original values)
+export const TOKEN_LIMITS = {
+    LARGE: 4096,       // Original: 8000 (getVibeOptions, generateRescueVibe)
+    MEDIUM: 2048,      // Original: 3500 (expandVibe)
+    STANDARD: 1024,    // Original: 2000 (generateDJRecommendation, backfill)
+    SMALL: 768,        // Original: 1500 (assessCurrentMood) - rounded to 768
+} as const;
+
+// Available models
+export const GEMINI_MODELS: Record<ModelId, GeminiModel> = {
+    'gemini-3-pro': {
+        id: 'gemini-3-pro',
+        name: 'Gemini 3 Pro',
+        description: 'Hackathon preview (check quota)',
+        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent',
+        maxOutputTokens: TOKEN_LIMITS.LARGE, // Use LARGE as model max capability default
+        tier: 'pro',
+    },
+    'gemini-2.5-pro': {
+        id: 'gemini-2.5-pro',
+        name: 'Gemini 2.5 Pro',
+        description: 'Latest stable pro model',
+        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent',
+        maxOutputTokens: TOKEN_LIMITS.LARGE,
+        tier: 'pro',
+    },
+    'gemini-2.0-flash': {
+        id: 'gemini-2.0-flash',
+        name: 'Gemini 2.0 Flash',
+        description: 'Fast & reliable',
+        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+        maxOutputTokens: TOKEN_LIMITS.LARGE,
+        tier: 'flash',
+    },
+    'gemini-2.5-flash': {
+        id: 'gemini-2.5-flash',
+        name: 'Gemini 2.5 Flash',
+        description: 'Newest fast model',
+        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+        maxOutputTokens: TOKEN_LIMITS.LARGE,
+        tier: 'flash',
+    },
+} as const;
+
+// Model priority for fallback (in order)
+export const MODEL_PRIORITY: ModelId[] = ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-2.5-flash'];
+
+// Default model - Gemini 2.5 Pro (Stable) due to 3.0 quota limits
+export const DEFAULT_MODEL: ModelId = 'gemini-2.5-pro';
+
+// Legacy exports for backwards compatibility
+export const GEMINI_API_URL = GEMINI_MODELS[DEFAULT_MODEL].url;
 
 export const DEFAULT_JSON_CONFIG = {
     responseMimeType: "application/json",
-    maxOutputTokens: 2048,
+    maxOutputTokens: TOKEN_LIMITS.STANDARD, // Default to standard (1024)
     temperature: 0.7,
-    topP: 0.9
+    topP: 0.9,
 } as const;

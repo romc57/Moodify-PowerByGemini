@@ -165,7 +165,7 @@ server.listen(PORT, () => {
 
     // Try to open browser
     const openCommand = process.platform === 'darwin' ? 'open' :
-                        process.platform === 'win32' ? 'start' : 'xdg-open';
+        process.platform === 'win32' ? 'start' : 'xdg-open';
 
     exec(`${openCommand} "${authUrl.toString()}"`, (err) => {
         if (err) {

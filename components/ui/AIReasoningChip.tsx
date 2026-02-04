@@ -3,6 +3,7 @@
  * Features: Glassmorphism, animated sparkle icon, gradient border
  */
 
+import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect } from 'react';
@@ -15,7 +16,6 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
 
 interface AIReasoningChipProps {
   text: string;
@@ -57,7 +57,7 @@ export const AIReasoningChip: React.FC<AIReasoningChipProps> = ({
     } else {
       sparkleScale.value = withTiming(1, { duration: 300 });
     }
-  }, [isThinking]);
+  }, [isThinking, sparkleRotation, sparkleScale, shimmerPosition]);
 
   const sparkleStyle = useAnimatedStyle(() => ({
     transform: [

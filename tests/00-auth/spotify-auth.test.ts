@@ -8,7 +8,7 @@
  */
 
 import axios from 'axios';
-import { loadTestApiKeys, validateSpotifyCredentials } from '../utils/testApiKeys';
+import { loadTestApiKeys, validateSpotifyCredentials, logTestData } from '../utils/testApiKeys';
 
 describe('Spotify Authentication (Real API)', () => {
     const keys = loadTestApiKeys();
@@ -83,6 +83,7 @@ describe('Spotify Authentication (Real API)', () => {
             return;
         }
 
+        logTestData('Spotify token validation', { input: 'access token from .env.test' }, { valid: true }, { valid: tokenIsValid });
         expect(tokenIsValid).toBe(true);
     }, 15000);
 
@@ -97,6 +98,14 @@ describe('Spotify Authentication (Real API)', () => {
             timeout: 10000
         });
 
+        logTestData('Spotify /v1/me profile', { input: 'GET /v1/me with access token' }, { status: 200, hasId: true, hasDisplayName: true }, {
+            status: response.status,
+            hasId: response.data?.id != null,
+            hasDisplayName: response.data?.display_name != null,
+            id: response.data?.id,
+            display_name: response.data?.display_name
+        });
+
         expect(response.status).toBe(200);
         expect(response.data).toHaveProperty('id');
         expect(response.data).toHaveProperty('display_name');
@@ -106,6 +115,7 @@ describe('Spotify Authentication (Real API)', () => {
 
     it('should reject invalid access token', async () => {
         const result = await validateSpotifyCredentials('invalid-token-12345');
+        logTestData('Spotify invalid token', { input: 'invalid-token-12345' }, { valid: false, error: 'defined' }, { valid: result.valid, error: result.error });
         expect(result.valid).toBe(false);
         expect(result.error).toBeDefined();
     }, 15000);
@@ -131,6 +141,8 @@ describe('Spotify Authentication (Real API)', () => {
                         validateStatus: (status) => status < 500
                     }
                 );
+
+                logTestData(`Spotify scope ${endpoint.scope}`, { input: `GET ${endpoint.url}` }, { status: [200, 204] }, { status: response.status });
 
                 if (response.status === 403) {
                     throw new Error(`Missing scope: ${endpoint.scope}`);

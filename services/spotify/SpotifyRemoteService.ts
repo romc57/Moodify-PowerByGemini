@@ -260,10 +260,13 @@ export class SpotifyRemoteService {
         try {
             return await makeRequest(token);
         } catch (error: any) {
-            // Handle 401 by refreshing token
-            if (error.response?.status === 401 || error.message === 'NO_TOKEN') {
+            // Handle 401 (Unauthorized) or 403 (Forbidden) by refreshing token
+            const status = error.response?.status;
+            if (status === 401 || status === 403 || error.message === 'NO_TOKEN') {
+                console.log(`[SpotifyRemote] Auth error (${status || 'NO_TOKEN'}) - Attempting auto-refresh...`);
                 token = await this.refreshAccessToken();
                 if (token) {
+                    console.log('[SpotifyRemote] Refresh successful, retrying request...');
                     return await makeRequest(token);
                 }
             }
@@ -389,10 +392,6 @@ export class SpotifyRemoteService {
             return items || [];
         } catch (e: any) {
             console.error('[SpotifyRemote] Search Error', (e as any).response ? (e as any).response.data : e);
-            if (e.response && e.response.status === 403) {
-                console.warn('[SpotifyRemote] 403 during search - attempting token refresh');
-                await this.refreshAccessToken();
-            }
             return [];
         }
     }
