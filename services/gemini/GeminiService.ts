@@ -1,10 +1,10 @@
+import { GeminiErrors, ServiceError } from '@/services/core/ServiceError';
+import { useErrorStore } from '@/stores/ErrorStore';
 import axios from 'axios';
 import { create } from 'zustand';
-import { dbService } from '../database/DatabaseService';
+import { dbService } from '../database';
+import { GEMINI_API_URL, DEFAULT_JSON_CONFIG as DEFAULT_CONFIG } from './constants';
 import { GeminiPrompts } from './GeminiPrompts';
-
-// Using Gemini 3 Pro for Google Hackathon
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent';
 
 /**
  * Thinking level controls how much "reasoning" the model performs.
@@ -42,13 +42,10 @@ export const useGeminiStore = create<GeminiState>((set) => ({
 /**
  * Default generation config for JSON responses
  * Following Gemini 3 Pro best practices from CLAUDE.md
+ * Uses constants from constants.ts for one source of truth
  */
 const DEFAULT_JSON_CONFIG: GeminiGenerationConfig = {
-    responseMimeType: "application/json",
-    thinkingLevel: 'low',
-    maxOutputTokens: 2048, // Increased for Gemini 3 Pro (thinking tokens consume output budget)
-    temperature: 0.7,
-    topP: 0.9
+    ...DEFAULT_CONFIG,
 };
 
 class GeminiService {
@@ -101,7 +98,7 @@ class GeminiService {
         const config = { ...DEFAULT_JSON_CONFIG, ...overrides };
         return {
             responseMimeType: config.responseMimeType,
-            // thinking_level: config.thinkingLevel, // NOT SUPPORTED IN STANDARD API YET
+            // thinking_level: config.thinkingLevel, // REMOVED: Causing 400 Invalid Argument
             maxOutputTokens: config.maxOutputTokens,
             temperature: config.temperature,
             topP: config.topP,
@@ -111,17 +108,223 @@ class GeminiService {
 
     /**
      * Parse JSON response from Gemini, handling markdown code blocks
+     * Includes validation and error handling for malformed responses
      */
     private parseJsonResponse(text: string): any {
-        const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        return JSON.parse(cleanedText);
+        try {
+            const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            const parsed = JSON.parse(cleanedText);
+
+            // Basic validation - ensure we got an object or array
+            if (parsed === null || (typeof parsed !== 'object' && !Array.isArray(parsed))) {
+                console.warn('[Gemini] Parsed JSON is not an object/array:', typeof parsed);
+                this.emitError(GeminiErrors.parseError('Response was not a valid JSON object'));
+                return {};
+            }
+
+            return parsed;
+        } catch (error: any) {
+            console.error('[Gemini] JSON parse error:', error.message);
+            console.error('[Gemini] Raw text (first 1000 chars):', text?.substring(0, 1000));
+
+            // REPAIR: Try to salvage truncated JSON arrays
+            // Find all complete JSON objects in the array
+            const repairedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+
+            if (repairedText.startsWith('[')) {
+                console.log('[Gemini] Attempting JSON repair for truncated array...');
+
+                // Find all complete objects by looking for `},` or `}]` patterns
+                const objectMatches: any[] = [];
+                const objectPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
+                let match;
+
+                while ((match = objectPattern.exec(repairedText)) !== null) {
+                    try {
+                        const obj = JSON.parse(match[0]);
+                        if (obj && obj.id && obj.title) {
+                            objectMatches.push(obj);
+                        }
+                    } catch {
+                        // Skip malformed objects
+                    }
+                }
+
+                if (objectMatches.length > 0) {
+                    console.log(`[Gemini] Repaired: Salvaged ${objectMatches.length} complete options from truncated response`);
+                    return objectMatches;
+                }
+            }
+
+            this.emitError(GeminiErrors.parseError(error.message));
+            throw error;
+        }
+    }
+
+    /**
+     * Emit error to ErrorStore for UI display
+     */
+    private emitError(error: ServiceError): void {
+        useErrorStore.getState().setError(error);
+    }
+
+    /**
+     * Clear Gemini errors from ErrorStore
+     */
+    private clearError(): void {
+        useErrorStore.getState().clearError('gemini');
+    }
+
+    /**
+     * Centralized Gemini error handling
+     * Determines error type and emits appropriate error to ErrorStore
+     */
+    private handleGeminiError(error: any, context: string): void {
+        const status = error.response?.status;
+        const errorMessage = error.response?.data?.error?.message || error.message || '';
+
+        // DEBUG: Log full error details
+        console.error('[Gemini] RAW ERROR:', {
+            status,
+            message: errorMessage,
+            data: error.response?.data,
+            headers: error.response?.headers
+        });
+
+        if (status === 400) {
+            if (errorMessage.includes('thoughtSignature') || errorMessage.includes('Invalid Argument')) {
+                this.clearConversationState();
+                this.emitError(GeminiErrors.signatureError(errorMessage));
+            } else {
+                this.emitError(GeminiErrors.unknown(`${context}: ${errorMessage}`));
+            }
+        } else if (status === 401 || status === 403) {
+            this.emitError(GeminiErrors.invalidKey(errorMessage));
+        } else if (status === 429) {
+            this.emitError(GeminiErrors.rateLimited(errorMessage));
+        } else if (error.message === 'Network Error' || error.code === 'ECONNABORTED') {
+            this.emitError(GeminiErrors.networkError(errorMessage));
+        } else if (error.message === 'Concurrent Request Blocked') {
+            this.emitError(GeminiErrors.concurrentBlocked());
+        } else {
+            this.emitError(GeminiErrors.unknown(`${context}: ${errorMessage}`));
+        }
+    }
+
+    /**
+     * Execute request with exponential backoff retry
+     * Retries on 429 (rate limit) and 5xx errors
+     */
+    private async withRetry<T>(
+        operation: () => Promise<T>,
+        maxRetries: number = 3,
+        context: string = 'request'
+    ): Promise<T> {
+        let lastError: any;
+
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                const result = await operation();
+                // Clear any previous errors on success
+                this.clearError();
+                return result;
+            } catch (error: any) {
+                lastError = error;
+                const status = error.response?.status;
+
+                // Only retry on rate limit (429) or server errors (5xx)
+                const isRetryable = status === 429 || (status >= 500 && status < 600);
+
+                if (!isRetryable || attempt === maxRetries) {
+                    break;
+                }
+
+                // Exponential backoff: 1s, 2s, 4s
+                const delay = Math.pow(2, attempt) * 1000;
+                console.log(`[Gemini] ${context} attempt ${attempt + 1} failed (${status}), retrying in ${delay}ms...`);
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+
+        throw lastError;
     }
 
     /**
      * Extract text from Gemini response
      */
     private extractResponseText(response: any): string | null {
-        return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) {
+            console.warn('[Gemini] Response has no text. Candidates:', JSON.stringify(response.data?.candidates || 'None'));
+            console.warn('[Gemini] Prompt Feedback:', JSON.stringify(response.data?.promptFeedback || 'None'));
+        }
+        return text || null;
+    }
+
+    /**
+     * Log prompt for debugging
+     */
+    private logPrompt(prompt: string): void {
+        if (prompt) {
+            console.log('\n=== GEMINI PROMPT START ===\n');
+            console.log(prompt.substring(0, 5000)); // Log full prompt (up to 5k chars)
+            console.log('\n=== GEMINI PROMPT END ===\n');
+        }
+    }
+
+    /**
+     * Build request body for Gemini API
+     */
+    private buildRequestBody(
+        prompt: string,
+        generationConfig: Record<string, any>,
+        includeThoughtSignature: boolean
+    ): Record<string, any> {
+        const requestBody: Record<string, any> = {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig
+        };
+
+        if (includeThoughtSignature && this.lastThoughtSignature) {
+            requestBody.thoughtSignature = this.lastThoughtSignature;
+        }
+
+        return requestBody;
+    }
+
+    /**
+     * Check and enforce concurrency lock
+     */
+    private checkConcurrency(): void {
+        if (this.isGenerating) {
+            console.warn('[Gemini] Request BLOCKED: An API call is already in progress.');
+            throw new Error('Concurrent Request Blocked');
+        }
+        this.isGenerating = true;
+    }
+
+    /**
+     * Execute the actual API request
+     */
+    private async executeRequest(apiKey: string, requestBody: Record<string, any>): Promise<any> {
+        const startTime = Date.now();
+        const maxTokens = requestBody.generationConfig.maxOutputTokens;
+        console.log(`[Gemini] Requesting: GenerateContent (Tokens: ${maxTokens})`);
+
+        const response = await axios.post(
+            `${GEMINI_API_URL}?key=${apiKey}`,
+            requestBody
+        );
+
+        const duration = Date.now() - startTime;
+        console.log(`[Gemini] Response (${response.status}): GenerateContent took ${duration}ms`);
+
+        // Store thought signature if returned
+        if (response.data.thoughtSignature) {
+            this.lastThoughtSignature = response.data.thoughtSignature;
+        }
+
+        return response;
     }
 
     /**
@@ -134,39 +337,14 @@ class GeminiService {
         config: Partial<GeminiGenerationConfig> = {},
         includeThoughtSignature: boolean = false
     ): Promise<any> {
+        this.logPrompt(prompt);
         const generationConfig = this.buildGenerationConfig(config);
+        const requestBody = this.buildRequestBody(prompt, generationConfig, includeThoughtSignature);
 
-        const requestBody: Record<string, any> = {
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig
-        };
-
-        if (includeThoughtSignature && this.lastThoughtSignature) {
-            requestBody.thoughtSignature = this.lastThoughtSignature;
-        }
-
-        if (this.isGenerating) {
-            console.warn('[Gemini] Request BLOCKED: An API call is already in progress.');
-            throw new Error('Concurrent Request Blocked');
-        }
-
-        this.isGenerating = true;
+        this.checkConcurrency();
 
         try {
-            const response = await axios.post(
-                `${GEMINI_API_URL}?key=${apiKey}`,
-                requestBody
-            );
-
-            // Debug: Log raw response structure for Gemini 3 Pro
-            // console.log('[Gemini] Raw API Response:', JSON.stringify(response.data, null, 2).substring(0, 500));
-
-            // Store thought signature if returned
-            if (response.data.thoughtSignature) {
-                this.lastThoughtSignature = response.data.thoughtSignature;
-            }
-
-            return response;
+            return await this.executeRequest(apiKey, requestBody);
         } finally {
             this.isGenerating = false;
         }
@@ -181,7 +359,7 @@ class GeminiService {
                     contents: [{ parts: [{ text: "Hello" }] }],
                     generationConfig: {
                         maxOutputTokens: 1,
-                        // thinking_level: 'minimal' 
+                        // thinking_level: 'minimal' // Removed to prevent 400 errors with pro-preview models
                     }
                 }
             );
@@ -284,7 +462,7 @@ class GeminiService {
         const prompt = GeminiPrompts.generateVibeOptionsPrompt(recentHistory, favorites, userInstruction, excludeTracks);
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: 8000 }); // Increased for 16 vibe options
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: 8000 }, true); // Include thoughtSignature
 
             const text = this.extractResponseText(response);
             if (!text) return [];
@@ -292,9 +470,7 @@ class GeminiService {
             const parsed = this.parseJsonResponse(text);
             return parsed.options || [];
         } catch (error: any) {
-            if (error.response?.status !== 400 && error.response?.status !== 401) {
-                console.warn('[Gemini] Vibe options failed:', error.message);
-            }
+            this.handleGeminiError(error, 'getVibeOptions');
             return [];
         }
     }
@@ -310,7 +486,7 @@ class GeminiService {
         const prompt = GeminiPrompts.generateRescueVibePrompt(recentSkips, favorites, excludeTracks);
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: 4000 });
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: 8000 }, true); // Increased limit & Include thoughtSignature
             const text = this.extractResponseText(response);
             if (!text) return null;
 
@@ -322,7 +498,7 @@ class GeminiService {
                 vibe: parsed.vibe || parsed.new_vibe_name || "New Vibe"
             };
         } catch (error: any) {
-            console.warn('[Gemini] Rescue vibe failed:', error.message);
+            this.handleGeminiError(error, 'generateRescueVibe');
             return null;
         }
     }
@@ -339,7 +515,7 @@ class GeminiService {
         const prompt = GeminiPrompts.generateVibeExpansionPrompt(seedTrack, recentHistory, favorites, excludeTracks);
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: 3500 });
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: 3500 }, true); // Include thoughtSignature
 
             const text = this.extractResponseText(response);
             if (!text) return { items: [] };
@@ -351,10 +527,7 @@ class GeminiService {
                 mood: parsed.mood || parsed.mood_description
             };
         } catch (error: any) {
-            // Silently handle - likely missing API key
-            if (error.response?.status !== 400 && error.response?.status !== 401) {
-                console.warn('[Gemini] Expand vibe failed:', error.message);
-            }
+            this.handleGeminiError(error, 'expandVibe');
             return { items: [] };
         }
     }
@@ -375,7 +548,7 @@ class GeminiService {
 
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: 1500 });
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: 1500 }, true); // Include thoughtSignature
 
             const text = this.extractResponseText(response);
             if (!text) {
@@ -394,12 +567,36 @@ class GeminiService {
                 recommended_direction: parsed.recommended_direction || 'keep_current'
             };
         } catch (error: any) {
-            // Silently handle - user hasn't configured Gemini API key yet
-            // Only log if it's not a 400/401 error (which indicates missing/invalid key)
-            if (error.response?.status !== 400 && error.response?.status !== 401) {
-                console.warn('[Gemini] assessCurrentMood failed:', error.message);
-            }
+            this.handleGeminiError(error, 'assessCurrentMood');
             return null;
+        }
+    }
+
+    /**
+     * Public method for backfill requests from ValidatedQueueService
+     * Wraps makeRequest with proper error handling and retry logic
+     */
+    async backfillRequest(
+        prompt: string,
+        config: Partial<GeminiGenerationConfig> = {}
+    ): Promise<{ text: string | null; error?: string }> {
+        const apiKey = await this.getApiKey();
+        if (!apiKey) {
+            return { text: null, error: 'No API key configured' };
+        }
+
+        try {
+            const response = await this.withRetry(
+                () => this.makeRequest(apiKey, prompt, { maxOutputTokens: 2000, ...config }, true),
+                2, // 2 retries for backfill
+                'backfill'
+            );
+
+            const text = this.extractResponseText(response);
+            return { text };
+        } catch (error: any) {
+            this.handleGeminiError(error, 'backfillRequest');
+            return { text: null, error: error.message };
         }
     }
 }

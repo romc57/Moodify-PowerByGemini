@@ -6,16 +6,17 @@
 import { AIReasoningChip } from '@/components/ui/AIReasoningChip';
 import { AnimatedAlbumArt } from '@/components/ui/AnimatedAlbumArt';
 import { AnimatedPlayButton } from '@/components/ui/AnimatedPlayButton';
+import { ServiceErrorBanner } from '@/components/ui/ServiceErrorBanner';
 import { WaveformProgress } from '@/components/ui/WaveformProgress';
 import { VibeSelector } from '@/components/VibeSelector';
 import { THEMES } from '@/constants/theme';
 import { useAutoDJ } from '@/hooks/useAutoDJ';
 import { recommendationService } from '@/services/core/RecommendationService';
 import { validatedQueueService } from '@/services/core/ValidatedQueueService';
-import { spotifyRemote } from '@/services/spotify/SpotifyRemoteService';
+import { voiceService } from '@/services/core/VoiceService';
 import { usePlayerStore } from '@/stores/PlayerStore';
-import { useSkipTracker } from '@/stores/SkipTrackerStore';
 import { useSettingsStore } from '@/stores/SettingsStore';
+import { useSkipTracker } from '@/stores/SkipTrackerStore';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -30,16 +31,16 @@ import {
   View
 } from 'react-native';
 import Animated, {
+  Easing,
   FadeIn,
   FadeInDown,
   FadeInUp,
   SharedValue,
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
   withRepeat,
+  withSpring,
   withTiming,
-  Easing,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -54,7 +55,7 @@ export default function HomeScreen() {
   const activeTheme = THEMES[theme] || THEMES.midnight;
   const insets = useSafeAreaInsets();
 
-  const { isPlaying, currentTrack, togglePlay, next, prev, playList, playTrack, currentMood, assessedMood, setAssessedMood } = usePlayerStore();
+  const { isPlaying, currentTrack, togglePlay, next, prev, playVibe, playTrack, currentMood, assessedMood, setAssessedMood } = usePlayerStore();
   const { reset: resetSkipTracker, setRescueMode } = useSkipTracker();
 
   // Auto DJ Logic
@@ -109,36 +110,36 @@ export default function HomeScreen() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const syncState = async () => {
-    try {
-      const state = await spotifyRemote.getCurrentState();
-      if (state) {
-        usePlayerStore.getState().setInternalState({ isPlaying: state.is_playing, track: state });
-
-        // Update progress
-        const progressMs = state.progress_ms || 0;
-        const durationMs = state.duration_ms || 1;
-
-        setProgress(durationMs > 0 ? progressMs / durationMs : 0);
-        setCurrentTime(formatTime(progressMs));
-        setTotalTime(formatTime(durationMs));
-      } else {
-        // No active playback - reset state to reflect reality
-        usePlayerStore.getState().setInternalState({ isPlaying: false, track: null });
-        setProgress(0);
-        setCurrentTime('0:00');
-        setTotalTime('0:00');
-      }
-    } catch (e) {
-      console.warn('[HomeScreen] Sync state error:', e);
-    }
-  };
+  /* 
+   * Sync Logic:
+   * We now rely on PlayerStore's centralized auto-sync to keep state fresh.
+   * This prevents double-polling and race conditions.
+   */
+  const { startAutoSync, stopAutoSync, progressMs } = usePlayerStore();
 
   useEffect(() => {
-    syncState();
-    const interval = setInterval(syncState, 1000);
-    return () => clearInterval(interval);
+    // Start syncing when screen is active
+    startAutoSync(1000); // 1s interval for UI updates
+    return () => {
+      stopAutoSync();
+    };
   }, []);
+
+  // Update local UI state when store updates
+  useEffect(() => {
+    if (currentTrack?.duration_ms && progressMs !== undefined) {
+      const duration = currentTrack.duration_ms || 1;
+      const prog = progressMs;
+
+      setProgress(Math.min(prog / duration, 1));
+      setCurrentTime(formatTime(prog));
+      setTotalTime(formatTime(duration));
+    } else {
+      setProgress(0);
+      setCurrentTime('0:00');
+      setTotalTime('0:00');
+    }
+  }, [progressMs, currentTrack]);
 
 
   const handleRefreshVibe = async () => {
@@ -170,6 +171,16 @@ export default function HomeScreen() {
 
   const handleVibeSelect = async (option: any) => {
     setShowVibeSelector(false);
+
+    // 1. Immediate Feedback: Announce over music (Seamless Transition)
+    // We do NOT pause here anymore per user request. 
+    // The previous track continues playing while "Fetching..." happens.
+    try {
+      voiceService.speak("Getting your vibe ready...", false); // false = don't pause music
+    } catch (e) {
+      console.warn("[HomeScreen] Audio feedback failed", e);
+    }
+
     setIsLoading(true);
     setGeminiReasoning(`Setting the vibe: ${option.title}...`);
 
@@ -199,22 +210,12 @@ export default function HomeScreen() {
           reason: `Selected Vibe: ${option.title}`
         };
       } else {
-        // Fallback logic (Should ideally not happen now with verification)
-        const query = option.track.query || `${option.track.title} ${option.track.artist}`;
-        const searchResults = await spotifyRemote.search(query, 'track');
-
-        if (searchResults && searchResults.length > 0) {
-          const track = searchResults[0];
-          seedTrack = {
-            title: track.name,
-            artist: track.artists?.[0]?.name || 'Unknown',
-            uri: track.uri,
-            artwork: track.album?.images?.[0]?.url,
-            reason: `Selected Vibe: ${option.title}`
-          };
-        } else {
-          throw new Error('Seed track not found');
-        }
+        // STRICT MODE: Fail if no validated URI. 
+        // We do *not* want to blind search and play the wrong song anymore.
+        setGeminiReasoning("Vibe unavailable (Song not found).");
+        Alert.alert("Song Not Found", "This vibe's seed song isn't available on Spotify right now. Please try another vibe.");
+        setIsLoading(false);
+        return;
       }
 
       // 1. Expand Vibe First (Atomic Operation)
@@ -241,7 +242,7 @@ export default function HomeScreen() {
       }
 
       // 3. Play All At Once (Replaces Spotify Context & Queue)
-      await playList(fullList, 0);
+      await usePlayerStore.getState().playVibe(fullList);
 
       recommendationService.recordPlay(seedTrack, false, { source: 'vibe_select' });
 
@@ -460,7 +461,8 @@ export default function HomeScreen() {
         isLoading={isLoading}
       />
 
-
+      {/* Service Error Banner - shows active errors */}
+      <ServiceErrorBanner position="top" maxErrors={2} />
 
     </LinearGradient >
   );

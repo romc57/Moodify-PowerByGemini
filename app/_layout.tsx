@@ -7,6 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { registerBackgroundTask } from '@/BackgroundTask';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useBackgroundAudio } from '@/hooks/useBackgroundAudio';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -14,6 +15,9 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+
+  // Enable background audio persistence (CRITICAL for AutoDJ)
+  useBackgroundAudio();
 
   // Register background task on app start
   useEffect(() => {

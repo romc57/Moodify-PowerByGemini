@@ -7,11 +7,48 @@ export interface FeedbackItem {
     timestamp: number;
 }
 
+/**
+ * Simple mutex for database operation serialization
+ */
+class Mutex {
+    private locked = false;
+    private queue: (() => void)[] = [];
+
+    async acquire(): Promise<void> {
+        if (!this.locked) {
+            this.locked = true;
+            return;
+        }
+        return new Promise(resolve => this.queue.push(resolve));
+    }
+
+    release(): void {
+        const next = this.queue.shift();
+        if (next) {
+            next();
+        } else {
+            this.locked = false;
+        }
+    }
+}
+
 class DatabaseService {
     private db: SQLite.SQLiteDatabase | null = null;
+    private initPromise: Promise<void> | null = null;
+    private mutex = new Mutex();
 
     constructor() {
-        this.init();
+        // Don't await in constructor - use ensureInit() pattern
+        this.initPromise = this.init();
+    }
+
+    /**
+     * Ensure database is initialized before operations
+     */
+    private async ensureInit(): Promise<void> {
+        if (this.initPromise) {
+            await this.initPromise;
+        }
     }
 
     async init() {
@@ -103,7 +140,7 @@ class DatabaseService {
 
     // Preferences
     async getPreference(key: string): Promise<string | null> {
-        if (!this.db) await this.init();
+        await this.ensureInit();
         try {
             const result = await this.db!.getFirstAsync<{ value: string }>(
                 'SELECT value FROM user_preferences WHERE key = ?;',
@@ -117,7 +154,8 @@ class DatabaseService {
     }
 
     async setPreference(key: string, value: string) {
-        if (!this.db) await this.init();
+        await this.ensureInit();
+        await this.mutex.acquire();
         try {
             await this.db!.runAsync(
                 'INSERT OR REPLACE INTO user_preferences (key, value) VALUES (?, ?);',
@@ -125,6 +163,8 @@ class DatabaseService {
             );
         } catch (e) {
             console.error('[Database] SetPreference Error', e);
+        } finally {
+            this.mutex.release();
         }
     }
 
@@ -136,7 +176,8 @@ class DatabaseService {
         skipped: boolean,
         context: object
     ) {
-        if (!this.db) await this.init();
+        await this.ensureInit();
+        await this.mutex.acquire();
         try {
             // 1. Log to History
             await this.db!.runAsync(
@@ -165,6 +206,8 @@ class DatabaseService {
             }
         } catch (e) {
             console.error('[Database] RecordPlay Transaction Error', e);
+        } finally {
+            this.mutex.release();
         }
     }
 
@@ -220,29 +263,36 @@ class DatabaseService {
         }
     }
 
+    /**
+     * Get daily history as "Track Name - Artist Name" format (for Gemini prompts)
+     */
     async getDailyHistory(): Promise<string[]> {
-        // Returns URIs of tracks played today
         if (!this.db) await this.init();
         try {
-            // Use the fast table
-            const result = await this.db!.getAllAsync<{ spotify_track_id: string }>(
-                `SELECT spotify_track_id FROM daily_play_log`
-            );
-            // Convert simple IDs back to URIs if needed, or just return IDs.
-            // Assuming caller expects "Track - Artist" strings based on previous interface?
-            // Actually, for exclusion, IDs/URIs are better.
-            // Let's check usage. If it expects strings, we might need a join or duplicate data.
-            // For now, let's keep the signature but fetch from tracks table via join for names
-
             const resultWithNames = await this.db!.getAllAsync<{ track_name: string, artist_name: string }>(
-                `SELECT t.track_name, t.artist_name 
+                `SELECT t.track_name, t.artist_name
                  FROM daily_play_log d
                  JOIN tracks t ON d.spotify_track_id = t.spotify_track_id`
             );
-
             return resultWithNames.map(item => `${item.track_name} - ${item.artist_name}`);
         } catch (e) {
             console.error('[Database] GetDailyHistory Error', e);
+            return [];
+        }
+    }
+
+    /**
+     * Get daily history as Spotify URIs (for deduplication checks)
+     */
+    async getDailyHistoryURIs(): Promise<string[]> {
+        if (!this.db) await this.init();
+        try {
+            const result = await this.db!.getAllAsync<{ spotify_track_id: string }>(
+                `SELECT spotify_track_id FROM daily_play_log`
+            );
+            return result.map(item => item.spotify_track_id);
+        } catch (e) {
+            console.error('[Database] GetDailyHistoryURIs Error', e);
             return [];
         }
     }
@@ -305,16 +355,21 @@ class DatabaseService {
     }
 
     async setServiceToken(service: string, token: string, refreshToken?: string) {
-        if (!this.db) await this.init();
+        await this.ensureInit();
+        await this.mutex.acquire();
         try {
+            // Ensure refreshToken is null, not undefined or string "null"
+            const refreshValue = refreshToken && refreshToken !== 'null' ? refreshToken : null;
             await this.db!.runAsync(
                 `INSERT INTO user_services (service_name, access_token, refresh_token, expires_at)
                  VALUES (?, ?, ?, ?)
                  ON CONFLICT(service_name) DO UPDATE SET access_token=excluded.access_token, refresh_token=excluded.refresh_token`,
-                [service, token, refreshToken || null, Date.now() + 3600000] // Fake 1hr expiry
+                [service, token, refreshValue, Date.now() + 3600000]
             );
         } catch (e) {
             console.error('[Database] SetToken Error', e);
+        } finally {
+            this.mutex.release();
         }
     }
 

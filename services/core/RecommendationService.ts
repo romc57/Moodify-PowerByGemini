@@ -1,4 +1,4 @@
-import { dbService } from '@/services/database/DatabaseService';
+import { dbService } from '@/services/database';
 import { usePlayerStore } from '@/stores/PlayerStore';
 import { gemini } from '../gemini/GeminiService';
 import { spotifyRemote } from '../spotify/SpotifyRemoteService';
@@ -17,6 +17,31 @@ export class RecommendationService {
     }
 
     /**
+     * Get combined exclusion list from DB daily history + current session
+     */
+    private async getExclusions(): Promise<string[]> {
+        const dailyExclusions = await dbService.getDailyHistory();
+        const sessionExclusions = usePlayerStore.getState().sessionHistory.map(h => `${h.title} - ${h.artist}`);
+        return Array.from(new Set([...dailyExclusions, ...sessionExclusions]));
+    }
+
+    /**
+     * Fetch user's top tracks as formatted favorites list
+     */
+    private async getFavorites(count: number, timeRange: 'short_term' | 'medium_term' | 'long_term' = 'short_term'): Promise<string[]> {
+        try {
+            const topTracks = await spotifyRemote.getUserTopTracks(count, timeRange);
+            if (!topTracks || !Array.isArray(topTracks)) {
+                return [];
+            }
+            return topTracks.map((t: any) => `${t.name} - ${t.artists?.[0]?.name || 'Unknown'}`);
+        } catch (e) {
+            console.warn('[RecService] Favorites fetch failed:', e);
+            return [];
+        }
+    }
+
+    /**
      * Entry Point 1: Get 8 Distinct Vibe Options (Refresh)
      * - Uses Daily Play Log for exclusions
      * - Uses Play Counts for affinity
@@ -25,24 +50,12 @@ export class RecommendationService {
     async getVibeOptions(userInstruction: string = ''): Promise<any[]> {
         try {
             const history = await dbService.getRecentHistory(20);
-
-            // EXCLUSION LOGIC: Combine Daily History (DB) + Current Session (Store)
-            const dailyExclusions = await dbService.getDailyHistory();
-            const sessionExclusions = usePlayerStore.getState().sessionHistory.map(h => `${h.title} - ${h.uri}`);
-
-            const allExclusions = Array.from(new Set([...dailyExclusions, ...sessionExclusions]));
-
-            let favorites: string[] = [];
-            try {
-                const topTracks = await spotifyRemote.getUserTopTracks(10, 'short_term');
-                favorites = topTracks.map((t: any) => `${t.name} - ${t.artists?.[0]?.name || 'Unknown'}`);
-            } catch (e) {
-                console.warn('[RecService] Favorites fetch failed:', e);
-            }
+            const allExclusions = await this.getExclusions();
+            const favorites = await this.getFavorites(10, 'short_term');
 
             console.log(`[RecService] Generating Vibe Options (Excluding ${allExclusions.length} tracks)...`);
 
-            // Request 10 options (reduced from 12 - closer to target of 8)
+            // Request 8 options (optimized for speed - target is 8)
             const options = await gemini.getVibeOptions(
                 history,
                 favorites,
@@ -60,8 +73,11 @@ export class RecommendationService {
             // Use ValidatedQueueService for smart validation with backfill
             const verifiedOptions = await validatedQueueService.validateVibeOptions(options, 8);
 
-            console.log(`[RecService] ValidatedQueueService returned ${verifiedOptions.length} options.`);
-            return verifiedOptions;
+            // STRICT FILTER: ensuring every option has a valid URI to prevent "wrong song" issues
+            const strictOptions = verifiedOptions.filter(opt => opt.track && opt.track.uri);
+
+            console.log(`[RecService] ValidatedQueueService returned ${verifiedOptions.length} (Strict: ${strictOptions.length}) options.`);
+            return strictOptions;
 
         } catch (error) {
             console.error('[RecService] GetVibeOptions Failed:', error);
@@ -81,15 +97,8 @@ export class RecommendationService {
         try {
             console.log('[RecService] Generating Rescue Vibe...');
 
-            const dailyExclusions = await dbService.getDailyHistory();
-            const sessionExclusions = usePlayerStore.getState().sessionHistory.map(h => `${h.title} - ${h.uri}`);
-            const allExclusions = Array.from(new Set([...dailyExclusions, ...sessionExclusions]));
-
-            let favorites: string[] = [];
-            try {
-                const topTracks = await spotifyRemote.getUserTopTracks(10, 'medium_term');
-                favorites = topTracks.map((t: any) => `${t.name} - ${t.artists?.[0]?.name || 'Unknown'}`);
-            } catch (e) { }
+            const allExclusions = await this.getExclusions();
+            const favorites = await this.getFavorites(10, 'medium_term');
 
             const result = await gemini.generateRescueVibe(
                 recentSkips,
@@ -163,16 +172,8 @@ export class RecommendationService {
     ): Promise<{ items: any[]; mood?: string }> {
         try {
             const history = await dbService.getRecentHistory(10);
-
-            const dailyExclusions = await dbService.getDailyHistory();
-            const sessionExclusions = usePlayerStore.getState().sessionHistory.map(h => `${h.title} - ${h.uri}`);
-            const allExclusions = Array.from(new Set([...dailyExclusions, ...sessionExclusions]));
-
-            let favorites: string[] = [];
-            try {
-                const topTracks = await spotifyRemote.getUserTopTracks(5, 'short_term');
-                favorites = topTracks.map((t: any) => `${t.name} - ${t.artists?.[0]?.name}`);
-            } catch (e) { }
+            const allExclusions = await this.getExclusions();
+            const favorites = await this.getFavorites(5, 'short_term');
 
             console.log(`[RecService] Expanding vibe from seed: ${seedTrack.title}...`);
             const result = await gemini.expandVibe(
@@ -216,6 +217,18 @@ export class RecommendationService {
     }
 
     /**
+     * Fisher-Yates shuffle algorithm (unbiased)
+     */
+    private shuffleArray<T>(array: T[]): T[] {
+        const result = [...array];
+        for (let i = result.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [result[i], result[j]] = [result[j], result[i]];
+        }
+        return result;
+    }
+
+    /**
      * Fallback generator (Spotify Top Tracks)
      */
     private async getFallbackTracks(count: number): Promise<any[]> {
@@ -223,7 +236,7 @@ export class RecommendationService {
             const tracks = await spotifyRemote.getUserTopTracks(count * 2, 'medium_term');
             if (!tracks || tracks.length === 0) return [];
 
-            const shuffled = tracks.sort(() => 0.5 - Math.random()).slice(0, count);
+            const shuffled = this.shuffleArray(tracks).slice(0, count);
             return shuffled.map((t: any) => ({
                 title: t.name,
                 artist: t.artists?.[0]?.name || 'Unknown',

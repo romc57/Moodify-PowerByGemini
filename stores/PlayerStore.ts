@@ -1,4 +1,7 @@
+import { GeminiErrors, SpotifyErrors } from '@/services/core/ServiceError';
+import { replaceQueue, appendToQueue, QueuedTrack } from '@/services/spotify/QueueManager';
 import { spotifyRemote } from '@/services/spotify/SpotifyRemoteService';
+import { useErrorStore } from '@/stores/ErrorStore';
 import { Alert } from 'react-native';
 import { create } from 'zustand';
 
@@ -24,8 +27,12 @@ interface PlayerState {
 
     // Queue State
     currentTrack: Track | null;
+    progressMs: number; // Added for UI sync
     queue: Track[];
     currentIndex: number;
+
+    // Auto-sync
+    autoSyncInterval: NodeJS.Timeout | null;
 
     // Actions
     setMood: (mood: string | null) => void;
@@ -41,12 +48,14 @@ interface PlayerState {
     prev: () => Promise<void>;
 
     // State Sync
-    setInternalState: (state: { isPlaying: boolean, track: Track | null, spotifyQueue?: Track[] }) => void;
+    setInternalState: (state: { isPlaying: boolean, track: Track | null, spotifyQueue?: Track[], progressMs?: number }) => void;
     syncFromSpotify: (fetchQueue?: boolean) => Promise<void>;
+    startAutoSync: (intervalMs?: number) => void;
+    stopAutoSync: () => void;
 
     // Session History
-    sessionHistory: { uri: string, title: string, status: 'played' | 'skipped', liked: boolean }[];
-    addToHistory: (item: { uri: string, title: string, status: 'played' | 'skipped', liked: boolean }) => void;
+    sessionHistory: { uri: string, title: string, artist: string, status: 'played' | 'skipped', liked: boolean }[];
+    addToHistory: (item: { uri: string, title: string, artist: string, status: 'played' | 'skipped', liked: boolean }) => void;
     lastActionTime: number;
 }
 
@@ -65,17 +74,58 @@ const ERROR_MESSAGES = {
     NO_TOKEN: {
         title: "Not Connected",
         message: "Please go to Settings and connect your Spotify account to start listening."
+    },
+    AUTH_FAILED: {
+        title: "Authentication Failed",
+        message: "Spotify session expired. Please reconnect in Settings."
+    },
+    GEMINI_ERROR: {
+        title: "AI Error",
+        message: "Gemini AI encountered an error. Please try again."
+    },
+    GEMINI_RATE_LIMITED: {
+        title: "AI Busy",
+        message: "Gemini AI is currently busy. Please wait a moment."
+    },
+    NETWORK_ERROR: {
+        title: "Network Error",
+        message: "Unable to connect. Please check your internet connection."
     }
 } as const;
 
 /**
- * Handle Spotify playback errors with appropriate alerts
+ * Handle Spotify playback errors with appropriate alerts and ErrorStore emission
  */
 function handlePlaybackError(error: any, context: string): void {
     console.error(`[PlayerStore] ${context} Error`, error);
 
     const errorType = error.message as keyof typeof ERROR_MESSAGES;
     const errorInfo = ERROR_MESSAGES[errorType];
+
+    // Emit to ErrorStore for banner display
+    switch (errorType) {
+        case 'NO_DEVICE':
+            useErrorStore.getState().setError(SpotifyErrors.noDevice());
+            break;
+        case 'PREMIUM_REQUIRED':
+            useErrorStore.getState().setError(SpotifyErrors.premiumRequired());
+            break;
+        case 'NO_TOKEN':
+            useErrorStore.getState().setError(SpotifyErrors.notAuthenticated());
+            break;
+        case 'AUTH_FAILED':
+            useErrorStore.getState().setError(SpotifyErrors.authExpired(context));
+            break;
+        case 'NETWORK_ERROR':
+            useErrorStore.getState().setError(SpotifyErrors.networkError(context));
+            break;
+        case 'GEMINI_ERROR':
+            useErrorStore.getState().setError(GeminiErrors.unknown(context));
+            break;
+        case 'GEMINI_RATE_LIMITED':
+            useErrorStore.getState().setError(GeminiErrors.rateLimited(context));
+            break;
+    }
 
     if (errorInfo) {
         Alert.alert(errorInfo.title, errorInfo.message, [{ text: "OK" }]);
@@ -85,12 +135,14 @@ function handlePlaybackError(error: any, context: string): void {
 export const usePlayerStore = create<PlayerState>((set, get) => ({
     isPlaying: false,
     currentTrack: null,
+    progressMs: 0,
     isLoading: false,
     isQueueModifying: false,
     queue: [],
     currentIndex: 0,
     sessionHistory: [],
     lastActionTime: 0,
+    autoSyncInterval: null,
 
     currentMood: null,
     assessedMood: null,
@@ -101,12 +153,46 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     setPlaying: (isPlaying) => set({ isPlaying }),
 
+    // Auto-sync methods
+    startAutoSync: (intervalMs = 1000) => { // Default to 1s for UI updates
+        const existing = get().autoSyncInterval;
+        if (existing) {
+            clearInterval(existing);
+        }
+
+        // 1. Start Polling for Playback State (Position, Play/Pause)
+        // This is cheap and can run often for UI
+        const interval = setInterval(() => {
+            get().syncFromSpotify();
+        }, intervalMs);
+
+        set({ autoSyncInterval: interval });
+        console.log(`[PlayerStore] UI Sync started (${intervalMs}ms interval)`);
+
+        // 2. Start Remote Polling for Track Changes (Skip/Finish)
+        // This handles "backend" logic like recording plays
+        spotifyRemote.startPolling((type, track) => {
+            console.log(`[PlayerStore] Track detected as ${type}: ${track.title}`);
+            // TODO: Record play in DB
+        });
+    },
+
+    stopAutoSync: () => {
+        const interval = get().autoSyncInterval;
+        if (interval) {
+            clearInterval(interval);
+            set({ autoSyncInterval: null });
+            console.log('[PlayerStore] Auto-sync stopped');
+        }
+        spotifyRemote.stopPolling();
+    },
+
     // Sync state from Spotify - the source of truth
     syncFromSpotify: async () => {
         try {
             // Prevent sync race condition (Double Switch Fix)
             const timeSinceLastAction = Date.now() - get().lastActionTime;
-            if (timeSinceLastAction < 5000) { // Increased to 5s to be safe
+            if (timeSinceLastAction < 1500) { // Reduced lockout
                 return;
             }
 
@@ -116,10 +202,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
             // 1. Get Playback State
             const state = await spotifyRemote.getCurrentState();
+
             if (state) {
+                // Only fetch queue occasionally or if track changed to save bandwidth
+                // For now, we fetch it if we have a state
+
                 // 2. Get Real Queue from Spotify
                 const queueData = await spotifyRemote.getUserQueue();
-
                 let synchronizedQueue: Track[] = [];
 
                 if (queueData) {
@@ -136,12 +225,65 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
                 get().setInternalState({
                     isPlaying: state.is_playing,
-                    track: state,
-                    spotifyQueue: synchronizedQueue // Pass this to update the store queue
+                    progressMs: state.progress_ms,
+                    track: {
+                        title: state.title,
+                        artist: state.artist,
+                        uri: state.uri,
+                        artwork: state.artwork,
+                        duration_ms: state.duration_ms
+                    },
+                    spotifyQueue: synchronizedQueue
                 });
+            } else {
+                // If no state (paused/inactive), we might still want to know if we are "paused"
+                // But usually state is null only if 204 or error.
             }
         } catch (err) {
-            console.warn('[PlayerStore] Sync from Spotify error:', err);
+            // console.warn('[PlayerStore] Sync from Spotify error:', err);
+        }
+    },
+
+    playVibe: async (tracks: Track[]) => {
+        if (!tracks.length) return;
+        const { syncFromSpotify, setInternalState } = get();
+
+        set({ isLoading: true, isQueueModifying: true, lastActionTime: Date.now() });
+
+        try {
+            const firstTrack = tracks[0];
+            const remainingTracks = tracks.slice(1);
+
+            // 1. Optimistic UI Update
+            setInternalState({
+                isPlaying: true,
+                track: { ...firstTrack, origin: 'optimistic' },
+                spotifyQueue: remainingTracks
+            });
+
+            // 2. Use QueueManager to properly replace queue
+            const queueTracks: QueuedTrack[] = tracks.map(t => ({
+                uri: t.uri,
+                title: t.title,
+                artist: t.artist
+            }));
+
+            const result = await replaceQueue(queueTracks);
+
+            if (!result.success) {
+                console.error('[PlayerStore] Queue replacement failed:', result.error);
+                useErrorStore.getState().setError(SpotifyErrors.unknown(result.error || 'Failed to start vibe.'));
+                return;
+            }
+
+            // 3. Sync state after queue is established
+            setTimeout(() => syncFromSpotify(true), 1500);
+
+        } catch (e: any) {
+            console.error('[PlayerStore] Use Vibe Failed:', e);
+            useErrorStore.getState().setError(SpotifyErrors.unknown('Failed to start vibe.'));
+        } finally {
+            setTimeout(() => set({ isLoading: false, isQueueModifying: false }), 2000);
         }
     },
 
@@ -162,6 +304,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     playList: async (tracks, startIndex = 0) => {
         set({ isLoading: true, isQueueModifying: true, lastActionTime: Date.now() });
+
         try {
             const tracksToPlay = tracks.slice(startIndex);
             if (tracksToPlay.length === 0) return;
@@ -169,45 +312,37 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
             const firstTrack = tracksToPlay[0];
             const remainingTracks = tracksToPlay.slice(1);
 
-            // Optimistic Update: Set current track immediately
+            // Optimistic UI update
             set({
-                queue: remainingTracks, // Queue is what's NEXT (not including current)
+                queue: remainingTracks,
                 currentIndex: 0,
                 currentTrack: { ...firstTrack, origin: 'optimistic' as const },
                 isPlaying: true
             });
 
-            // STEP 1: Play ONLY the first track (clears Spotify's context)
-            await spotifyRemote.play([firstTrack.uri]);
+            // Use QueueManager to replace queue properly
+            const queueTracks: QueuedTrack[] = tracksToPlay.map(t => ({
+                uri: t.uri,
+                title: t.title,
+                artist: t.artist
+            }));
 
-            // STEP 2: Add remaining tracks to Spotify's queue one by one
-            // This ensures our tracks are next, not Spotify's old queue
-            if (remainingTracks.length > 0) {
-                console.log(`[PlayerStore] Adding ${remainingTracks.length} tracks to queue...`);
-                for (const track of remainingTracks) {
-                    try {
-                        await spotifyRemote.addToQueue(track.uri);
-                        await new Promise(r => setTimeout(r, 150)); // Rate limit
-                    } catch (e) {
-                        console.warn(`[PlayerStore] Failed to queue ${track.title}`);
-                    }
-                }
+            const result = await replaceQueue(queueTracks);
+
+            if (!result.success) {
+                handlePlaybackError(new Error(result.error || 'Queue replacement failed'), 'PlayList');
+                return;
             }
 
-            // Update last action time to prevent immediate sync overwriting our optimistic queue
             set({ lastActionTime: Date.now() });
 
-            // Sync queue from Spotify after all tracks are added
-            setTimeout(() => {
-                get().syncFromSpotify();
-            }, 1000);
+            // Sync after queue is established
+            setTimeout(() => get().syncFromSpotify(), 1500);
+
         } catch (e: any) {
             handlePlaybackError(e, 'PlayList');
         } finally {
-            // Keep the lock for a bit longer to let Spotify ensure it processed everything
-            setTimeout(() => {
-                set({ isLoading: false, isQueueModifying: false });
-            }, 2000);
+            setTimeout(() => set({ isLoading: false, isQueueModifying: false }), 2000);
         }
     },
 
@@ -221,40 +356,40 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     },
 
     appendQueue: async (tracks: Track[]) => {
-        set({ isQueueModifying: true });
+        set({ isQueueModifying: true, lastActionTime: Date.now() });
+
         const { queue } = get();
         const existingUris = new Set(queue.map(t => t.uri));
         const uniqueTracks = tracks.filter(t => !existingUris.has(t.uri));
 
-        if (uniqueTracks.length === 0) return;
-
-        const successes: Track[] = [];
+        if (uniqueTracks.length === 0) {
+            set({ isQueueModifying: false });
+            return;
+        }
 
         try {
-            for (const track of uniqueTracks) {
-                try {
-                    await spotifyRemote.addToQueue(track.uri);
-                    successes.push(track);
-                    await new Promise(r => setTimeout(r, 200)); // Rate limit 200ms
-                } catch (e: any) {
-                    console.warn(`[PlayerStore] Failed to queue ${track.title}:`, e.message);
-                }
+            const queueTracks: QueuedTrack[] = uniqueTracks.map(t => ({
+                uri: t.uri,
+                title: t.title,
+                artist: t.artist
+            }));
+
+            const { added, failed } = await appendToQueue(queueTracks);
+
+            if (failed.length > 0) {
+                console.warn(`[PlayerStore] ${failed.length} tracks failed to queue`);
             }
 
-            // Update last action time to prevent immediate sync
-            set({ lastActionTime: Date.now() });
-
-            if (successes.length > 0) {
-                // Optimistic update first
-                set((state) => ({ queue: [...state.queue, ...successes] }));
-
-                // Then sync from Spotify to get accurate queue
-                setTimeout(() => {
-                    get().syncFromSpotify();
-                }, 1000);
+            if (added.length > 0) {
+                const addedTracks = uniqueTracks.filter(t =>
+                    added.some(a => a.uri === t.uri)
+                );
+                set((state) => ({ queue: [...state.queue, ...addedTracks] }));
+                setTimeout(() => get().syncFromSpotify(), 1000);
             }
+
         } catch (e: any) {
-            console.error('[PlayerStore] AppendQueue Global Error', e);
+            console.error('[PlayerStore] AppendQueue Error', e);
         } finally {
             set({ isQueueModifying: false });
         }
@@ -264,6 +399,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         set({ isLoading: true, lastActionTime: Date.now() });
         try {
             const { isPlaying } = get();
+            console.log(`[PlayerStore] TogglePlay called. isPlaying: ${isPlaying}`);
             if (isPlaying) {
                 await spotifyRemote.pause();
             } else {
@@ -315,13 +451,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         }
     },
 
-    setInternalState: ({ isPlaying, track, spotifyQueue }) => {
+    setInternalState: ({ isPlaying, track, spotifyQueue, progressMs }) => {
         if (track) {
             track.origin = 'sync';
         }
 
         // Only update if provided
         const updates: any = { isPlaying, currentTrack: track };
+        if (progressMs !== undefined) updates.progressMs = progressMs;
         if (spotifyQueue) {
             updates.queue = spotifyQueue;
         }

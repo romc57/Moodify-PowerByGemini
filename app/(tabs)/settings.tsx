@@ -50,6 +50,11 @@ export default function SettingsScreen() {
 
   const [localGeminiKey, setLocalGeminiKey] = useState('');
   const [localSpotifyClientId, setLocalSpotifyClientId] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [saveMessage, setSaveMessage] = useState('');
+  const [geminiValid, setGeminiValid] = useState<boolean | null>(null);
+  const [spotifyValid, setSpotifyValid] = useState<boolean | null>(null);
 
   const { request, promptAsync } = useSpotifyAuth();
 
@@ -74,23 +79,67 @@ export default function SettingsScreen() {
     checkConnection();
   }, []);
 
-  const handleSave = async () => {
-    // Validate Gemini Key if changed or empty (allow clearing?)
-    if (localGeminiKey) {
-      console.log('Validating Gemini Key...');
-      // We need to access the service directly since the store only sets it
-      // Importing gemini singleton to validate
-      const validation = await gemini.validateKey(localGeminiKey);
-
-      if (!validation.valid) {
-        Alert.alert("Validation Failed", `Gemini API Key is invalid.\n${validation.error || ''}`);
-        return;
-      }
+  // Reset status after a delay
+  useEffect(() => {
+    if (saveStatus !== 'idle') {
+      const timer = setTimeout(() => {
+        setSaveStatus('idle');
+        setSaveMessage('');
+      }, 5000);
+      return () => clearTimeout(timer);
     }
+  }, [saveStatus]);
 
-    await setGeminiApiKey(localGeminiKey);
-    await setSpotifyClientId(localSpotifyClientId);
-    Alert.alert("Success", "API Keys saved & verified!");
+  const handleSave = async () => {
+    setIsSaving(true);
+    setSaveStatus('idle');
+    setSaveMessage('');
+    setGeminiValid(null);
+    setSpotifyValid(null);
+
+    try {
+      // Validate Gemini Key if provided
+      if (localGeminiKey) {
+        console.log('Validating Gemini Key...');
+        const validation = await gemini.validateKey(localGeminiKey);
+
+        if (!validation.valid) {
+          setGeminiValid(false);
+          setSaveStatus('error');
+          setSaveMessage(`Gemini API Key invalid: ${validation.error || 'Validation failed'}`);
+          setIsSaving(false);
+          return;
+        }
+        setGeminiValid(true);
+      }
+
+      // Validate Spotify Client ID format (should be 32 hex characters)
+      if (localSpotifyClientId) {
+        const spotifyIdRegex = /^[a-f0-9]{32}$/i;
+        if (!spotifyIdRegex.test(localSpotifyClientId)) {
+          setSpotifyValid(false);
+          setSaveStatus('error');
+          setSaveMessage('Spotify Client ID should be 32 hex characters');
+          setIsSaving(false);
+          return;
+        }
+        setSpotifyValid(true);
+      }
+
+      // Save keys
+      await setGeminiApiKey(localGeminiKey);
+      await setSpotifyClientId(localSpotifyClientId);
+
+      setSaveStatus('success');
+      setSaveMessage('✓ API Keys saved & verified!');
+
+    } catch (e) {
+      console.error('Save error:', e);
+      setSaveStatus('error');
+      setSaveMessage('Failed to save keys. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleThemeSelect = (t: ThemeName) => {
@@ -278,35 +327,43 @@ export default function SettingsScreen() {
             padding={16}
             borderRadius={16}
           >
-            <Text style={[styles.label, { color: activeTheme.text }]}>Gemini API Key</Text>
+            <View style={styles.labelRow}>
+              <Text style={[styles.label, { color: activeTheme.text }]}>Gemini API Key</Text>
+              {geminiValid === true && <Ionicons name="checkmark-circle" size={16} color="#4ADE80" />}
+              {geminiValid === false && <Ionicons name="close-circle" size={16} color="#FF6B6B" />}
+            </View>
             <TextInput
               style={[
                 styles.input,
                 {
                   color: activeTheme.text,
-                  borderColor: activeTheme.border,
+                  borderColor: geminiValid === false ? '#FF6B6B' : geminiValid === true ? '#4ADE80' : activeTheme.border,
                   backgroundColor: 'rgba(0,0,0,0.2)',
                 },
               ]}
               value={localGeminiKey}
-              onChangeText={setLocalGeminiKey}
+              onChangeText={(text) => { setLocalGeminiKey(text); setGeminiValid(null); }}
               placeholder="Enter Gemini API Key"
               placeholderTextColor={activeTheme.textMuted}
               secureTextEntry
             />
 
-            <Text style={[styles.label, { color: activeTheme.text, marginTop: 12 }]}>Spotify Client ID</Text>
+            <View style={[styles.labelRow, { marginTop: 12 }]}>
+              <Text style={[styles.label, { color: activeTheme.text }]}>Spotify Client ID</Text>
+              {spotifyValid === true && <Ionicons name="checkmark-circle" size={16} color="#4ADE80" />}
+              {spotifyValid === false && <Ionicons name="close-circle" size={16} color="#FF6B6B" />}
+            </View>
             <TextInput
               style={[
                 styles.input,
                 {
                   color: activeTheme.text,
-                  borderColor: activeTheme.border,
+                  borderColor: spotifyValid === false ? '#FF6B6B' : spotifyValid === true ? '#4ADE80' : activeTheme.border,
                   backgroundColor: 'rgba(0,0,0,0.2)',
                 },
               ]}
               value={localSpotifyClientId}
-              onChangeText={setLocalSpotifyClientId}
+              onChangeText={(text) => { setLocalSpotifyClientId(text); setSpotifyValid(null); }}
               placeholder="Enter Spotify Client ID"
               placeholderTextColor={activeTheme.textMuted}
               autoCapitalize="none"
@@ -314,7 +371,8 @@ export default function SettingsScreen() {
 
             <AnimatedPressable
               onPress={handleSave}
-              style={saveButtonStyle}
+              disabled={isSaving}
+              style={[saveButtonStyle, isSaving && styles.buttonDisabled]}
               {...createPressHandlers(saveScale)}
             >
               <LinearGradient
@@ -323,10 +381,34 @@ export default function SettingsScreen() {
                 end={{ x: 1, y: 0 }}
                 style={styles.saveButton}
               >
-                <Ionicons name="save-outline" size={18} color="#fff" />
-                <Text style={styles.saveButtonText}>Save Keys</Text>
+                {isSaving ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Ionicons name="save-outline" size={18} color="#fff" />
+                )}
+                <Text style={styles.saveButtonText}>{isSaving ? 'Validating...' : 'Save Keys'}</Text>
               </LinearGradient>
             </AnimatedPressable>
+
+            {/* Status Banner */}
+            {saveStatus !== 'idle' && (
+              <View style={[
+                styles.statusBanner,
+                { backgroundColor: saveStatus === 'success' ? 'rgba(74, 222, 128, 0.15)' : 'rgba(255, 107, 107, 0.15)' }
+              ]}>
+                <Ionicons
+                  name={saveStatus === 'success' ? 'checkmark-circle' : 'warning'}
+                  size={18}
+                  color={saveStatus === 'success' ? '#4ADE80' : '#FF6B6B'}
+                />
+                <Text style={[
+                  styles.statusText,
+                  { color: saveStatus === 'success' ? '#4ADE80' : '#FF6B6B' }
+                ]}>
+                  {saveMessage}
+                </Text>
+              </View>
+            )}
           </GlassCard>
         </Animated.View>
 
@@ -587,5 +669,24 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
+  },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 12,
+  },
+  statusText: {
+    fontSize: 13,
+    fontWeight: '500',
+    flex: 1,
   },
 });

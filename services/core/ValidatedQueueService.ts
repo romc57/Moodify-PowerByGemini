@@ -1,6 +1,8 @@
-import { spotifyRemote } from '../spotify/SpotifyRemoteService';
+import { SpotifyErrors } from '@/services/core/ServiceError';
+import { useErrorStore } from '@/stores/ErrorStore';
+import { dbService } from '../database';
 import { gemini } from '../gemini/GeminiService';
-import { dbService } from '../database/DatabaseService';
+import { spotifyRemote } from '../spotify/SpotifyRemoteService';
 
 /**
  * Track suggestion from Gemini (before Spotify validation)
@@ -54,6 +56,15 @@ export interface BackfillContext {
  * 3. Requests backfill to meet target count
  * 4. Ensures no duplicates
  */
+/**
+ * Track match score result
+ */
+interface TrackMatchScore {
+    track: any;
+    score: number;
+    reasons: string[];
+}
+
 class ValidatedQueueService {
     private static instance: ValidatedQueueService;
 
@@ -63,7 +74,193 @@ class ValidatedQueueService {
     // Maximum backfill attempts to prevent infinite loops
     private readonly MAX_BACKFILL_ATTEMPTS = 2;
 
-    private constructor() {}
+    // Minimum score threshold for track matching (out of 100)
+    private readonly MIN_MATCH_SCORE = 65;
+
+    private constructor() { }
+
+    /**
+     * Normalize a title for comparison
+     * Removes punctuation, extra whitespace, and converts to lowercase
+     */
+    private normalizeTitle(title: string): string {
+        return title
+            .toLowerCase()
+            .replace(/[^\w\s]/g, '') // Remove punctuation
+            .replace(/\s+/g, ' ')    // Normalize whitespace
+            .trim();
+    }
+
+    /**
+     * Calculate similarity between two strings using Dice coefficient
+     * Returns a value between 0 and 1
+     */
+    private calculateSimilarity(str1: string, str2: string): number {
+        const s1 = this.normalizeTitle(str1);
+        const s2 = this.normalizeTitle(str2);
+
+        if (s1 === s2) return 1;
+        if (s1.length < 2 || s2.length < 2) return 0;
+
+        // Create bigrams
+        const bigrams1 = new Set<string>();
+        const bigrams2 = new Set<string>();
+
+        for (let i = 0; i < s1.length - 1; i++) {
+            bigrams1.add(s1.substring(i, i + 2));
+        }
+        for (let i = 0; i < s2.length - 1; i++) {
+            bigrams2.add(s2.substring(i, i + 2));
+        }
+
+        // Count intersection
+        let intersection = 0;
+        bigrams1.forEach(bigram => {
+            if (bigrams2.has(bigram)) intersection++;
+        });
+
+        return (2 * intersection) / (bigrams1.size + bigrams2.size);
+    }
+
+    /**
+     * Check if a track is likely a remix, live version, or remaster
+     * These are often not what the user wants
+     */
+    private isAlternateVersion(trackName: string): boolean {
+        const lowerName = trackName.toLowerCase();
+        const alternatePatterns = [
+            'remix',
+            'remixed',
+            'live',
+            'acoustic',
+            'remaster',
+            'remastered',
+            'demo',
+            'karaoke',
+            'instrumental',
+            'cover',
+            'tribute',
+            'radio edit',
+            'extended',
+            'club mix',
+            'dub mix',
+            'sped up',
+            'slowed'
+        ];
+
+        return alternatePatterns.some(pattern => lowerName.includes(pattern));
+    }
+
+    /**
+     * Score a Spotify search result against the target track
+     *
+     * Scoring system (max 100 points):
+     * - Exact title match: +50 points
+     * - Title contains target: +30 points
+     * - Artist match: +40 points
+     * - Contains remix/live/etc: -20 points
+     * - Higher popularity: +5 points (for top 20%)
+     */
+    private scoreTrackMatch(
+        result: any,
+        targetTitle: string,
+        targetArtist: string
+    ): TrackMatchScore {
+        let score = 0;
+        const reasons: string[] = [];
+
+        const resultTitle = result.name || '';
+        const resultArtist = result.artists?.[0]?.name || '';
+
+        const normalizedTarget = this.normalizeTitle(targetTitle);
+        const normalizedResult = this.normalizeTitle(resultTitle);
+        const normalizedTargetArtist = this.normalizeTitle(targetArtist);
+        const normalizedResultArtist = this.normalizeTitle(resultArtist);
+
+        // Title matching
+        const titleSimilarity = this.calculateSimilarity(targetTitle, resultTitle);
+
+        if (normalizedTarget === normalizedResult) {
+            score += 50;
+            reasons.push('exact_title');
+        } else if (titleSimilarity > 0.8) {
+            score += 40;
+            reasons.push('high_title_similarity');
+        } else if (normalizedResult.includes(normalizedTarget) || normalizedTarget.includes(normalizedResult)) {
+            score += 30;
+            reasons.push('title_contains');
+        } else if (titleSimilarity > 0.5) {
+            score += 20;
+            reasons.push('moderate_title_similarity');
+        }
+
+        // Artist matching
+        const artistSimilarity = this.calculateSimilarity(targetArtist, resultArtist);
+
+        if (normalizedTargetArtist === normalizedResultArtist) {
+            score += 40;
+            reasons.push('exact_artist');
+        } else if (artistSimilarity > 0.7) {
+            score += 30;
+            reasons.push('high_artist_similarity');
+        } else if (
+            normalizedResultArtist.includes(normalizedTargetArtist) ||
+            normalizedTargetArtist.includes(normalizedResultArtist)
+        ) {
+            score += 25;
+            reasons.push('artist_contains');
+        }
+
+        // Penalty for alternate versions (balanced to not reject valid matches)
+        if (this.isAlternateVersion(resultTitle) && !this.isAlternateVersion(targetTitle)) {
+            score -= 15; // Reduced from 30 to prevent rejecting exact matches
+            reasons.push('alternate_version_penalty');
+        }
+
+        // Bonus for popularity (helps distinguish original from obscure covers)
+        const popularity = result.popularity || 0;
+        if (popularity > 70) {
+            score += 10;
+            reasons.push('high_popularity');
+        } else if (popularity > 40) {
+            score += 5;
+        }
+
+        return { track: result, score, reasons };
+    }
+
+    /**
+     * Find the best matching track from search results
+     * Returns null if no track meets the minimum score threshold
+     */
+    private findBestMatch(
+        results: any[],
+        targetTitle: string,
+        targetArtist: string
+    ): any | null {
+        if (!results || results.length === 0) return null;
+
+        const scoredResults = results.map(result =>
+            this.scoreTrackMatch(result, targetTitle, targetArtist)
+        );
+
+        // Sort by score descending
+        scoredResults.sort((a, b) => b.score - a.score);
+
+        const best = scoredResults[0];
+
+        console.log(`[ValidatedQueue] Best match for "${targetTitle}" by "${targetArtist}":`,
+            `"${best.track.name}" by "${best.track.artists?.[0]?.name}" (score: ${best.score}, reasons: ${best.reasons.join(', ')})`
+        );
+
+        // Return null if below threshold
+        if (best.score < this.MIN_MATCH_SCORE) {
+            console.log(`[ValidatedQueue] Score ${best.score} below threshold ${this.MIN_MATCH_SCORE}`);
+            return null;
+        }
+
+        return best.track;
+    }
 
     static getInstance(): ValidatedQueueService {
         if (!ValidatedQueueService.instance) {
@@ -87,8 +284,8 @@ class ValidatedQueueService {
     }
 
     /**
-     * Validate a single track against Spotify
-     * Returns null if not found
+     * Validate a single track against Spotify using smart matching
+     * Returns null if not found or no good match
      */
     async validateTrack(suggestion: RawTrackSuggestion): Promise<ValidatedTrack | null> {
         try {
@@ -101,38 +298,37 @@ class ValidatedQueueService {
             let results = await spotifyRemote.search(query, 'track');
 
             if (results && results.length > 0) {
-                const match = results[0];
-                const uri = match.uri;
+                // Use smart matching instead of blind results[0]
+                const match = this.findBestMatch(results, suggestion.title, suggestion.artist);
 
-                // Check for duplicates
-                if (this.seenUris.has(uri)) {
-                    console.log(`[ValidatedQueue] Duplicate skipped: ${suggestion.title}`);
-                    return null;
+                if (match) {
+                    const uri = match.uri;
+
+                    // Check for duplicates
+                    if (this.seenUris.has(uri)) {
+                        console.log(`[ValidatedQueue] Duplicate skipped: ${suggestion.title}`);
+                        return null;
+                    }
+
+                    this.seenUris.add(uri);
+                    return {
+                        title: match.name,
+                        artist: match.artists?.[0]?.name || 'Unknown',
+                        uri: uri,
+                        artwork: match.album?.images?.[0]?.url,
+                        reason: suggestion.reason,
+                        originalSuggestion: `${suggestion.title} by ${suggestion.artist}`
+                    };
                 }
-
-                this.seenUris.add(uri);
-                return {
-                    title: match.name,
-                    artist: match.artists?.[0]?.name || 'Unknown',
-                    uri: uri,
-                    artwork: match.album?.images?.[0]?.url,
-                    reason: suggestion.reason,
-                    originalSuggestion: `${suggestion.title} by ${suggestion.artist}`
-                };
             }
 
-            // Strategy 2: Loose title search with artist verification
-            console.log(`[ValidatedQueue] Exact match failed for "${suggestion.title}", trying loose search`);
-            results = await spotifyRemote.search(suggestion.title, 'track');
+            // Strategy 2: Loose title search with smart matching
+            console.log(`[ValidatedQueue] Exact query failed for "${suggestion.title}", trying loose search`);
+            results = await spotifyRemote.search(`${cleanTitle} ${cleanArtist}`, 'track');
 
             if (results && results.length > 0) {
-                // Find a result where artist name partially matches
-                const match = results.find((t: any) =>
-                    t.artists.some((a: any) =>
-                        a.name.toLowerCase().includes(suggestion.artist.toLowerCase()) ||
-                        suggestion.artist.toLowerCase().includes(a.name.toLowerCase())
-                    )
-                );
+                // Use smart matching on loose results
+                const match = this.findBestMatch(results, suggestion.title, suggestion.artist);
 
                 if (match) {
                     const uri = match.uri;
@@ -197,6 +393,7 @@ class ValidatedQueueService {
 
     /**
      * Get backfill tracks from Gemini to replace failed validations
+     * Uses the public backfillRequest method for proper error handling
      */
     async getBackfillTracks(
         count: number,
@@ -217,13 +414,13 @@ class ValidatedQueueService {
         const prompt = this.buildBackfillPrompt(count, context, failedNames, existingNames, excludeTracks);
 
         try {
-            const apiKey = await dbService.getPreference('gemini_api_key');
-            if (!apiKey) return [];
+            // Use the public backfillRequest method instead of casting to any
+            const { text, error } = await gemini.backfillRequest(prompt, { maxOutputTokens: 2000 });
 
-            const response = await (gemini as any).makeRequest(apiKey, prompt, { maxOutputTokens: 2000 });
-            const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-            if (!text) return [];
+            if (error || !text) {
+                console.warn('[ValidatedQueue] Backfill request failed:', error || 'No response text');
+                return [];
+            }
 
             const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
             const parsed = JSON.parse(cleanedText);
@@ -235,7 +432,7 @@ class ValidatedQueueService {
             }));
 
         } catch (error) {
-            console.warn('[ValidatedQueue] Backfill request failed:', error);
+            console.warn('[ValidatedQueue] Backfill parse failed:', error);
             return [];
         }
     }
@@ -275,6 +472,70 @@ Pick well-known tracks that definitely exist on Spotify. Major label artists pre
     }
 
     /**
+     * Load exclusions for validation (URIs and text format)
+     */
+    private async loadExclusions(additionalExclusions: string[] = []): Promise<string[]> {
+        const dailyURIs = await dbService.getDailyHistoryURIs();
+        this.addToSeenUris(dailyURIs);
+        this.addToSeenUris(additionalExclusions);
+        return await dbService.getDailyHistory();
+    }
+
+    /**
+     * Perform backfill to reach target count
+     */
+    private async performBackfill(
+        validated: ValidatedTrack[],
+        failed: RawTrackSuggestion[],
+        targetCount: number,
+        context: Omit<BackfillContext, 'failedTracks' | 'existingTracks'>,
+        dailyExclusions: string[]
+    ): Promise<ValidatedTrack[]> {
+        let currentValidated = validated;
+        let currentFailed = failed;
+        let backfillAttempts = 0;
+
+        while (currentValidated.length < targetCount && 
+               backfillAttempts < this.MAX_BACKFILL_ATTEMPTS && 
+               currentFailed.length > 0) {
+            backfillAttempts++;
+            const needed = targetCount - currentValidated.length;
+
+            console.log(`[ValidatedQueue] Backfill attempt ${backfillAttempts}: need ${needed} more tracks`);
+
+            const backfillContext: BackfillContext = {
+                ...context,
+                failedTracks: currentFailed,
+                existingTracks: currentValidated
+            };
+
+            const backfillSuggestions = await this.getBackfillTracks(
+                needed + 3, // Request extra to account for potential failures
+                backfillContext,
+                dailyExclusions
+            );
+
+            if (backfillSuggestions.length === 0) {
+                console.log('[ValidatedQueue] Backfill returned no suggestions, stopping');
+                if (currentValidated.length < targetCount) {
+                    useErrorStore.getState().setError(
+                        SpotifyErrors.searchFailed(`Could only find ${currentValidated.length} of ${targetCount} requested tracks`)
+                    );
+                }
+                break;
+            }
+
+            const backfillResult = await this.validateBatch(backfillSuggestions);
+            currentValidated = [...currentValidated, ...backfillResult.validated];
+            currentFailed = backfillResult.failed;
+
+            console.log(`[ValidatedQueue] After backfill: ${currentValidated.length} validated`);
+        }
+
+        return currentValidated;
+    }
+
+    /**
      * MAIN ENTRY POINT: Validate and fill queue to target count
      *
      * This is the smart function that:
@@ -289,75 +550,35 @@ Pick well-known tracks that definitely exist on Spotify. Major label artists pre
         context: Omit<BackfillContext, 'failedTracks' | 'existingTracks'>,
         additionalExclusions: string[] = []
     ): Promise<ValidatedTrack[]> {
-        // Load daily exclusions + any additional (like session history)
-        const dailyExclusions = await dbService.getDailyHistory();
-        this.addToSeenUris(dailyExclusions);
-        this.addToSeenUris(additionalExclusions);
+        const dailyExclusions = await this.loadExclusions(additionalExclusions);
 
         console.log(`[ValidatedQueue] Starting validation. Target: ${targetCount}, Input: ${suggestions.length}`);
 
-        // Initial validation
-        let { validated, failed } = await this.validateBatch(suggestions);
+        const { validated, failed } = await this.validateBatch(suggestions);
+        const validatedWithBackfill = await this.performBackfill(
+            validated,
+            failed,
+            targetCount,
+            context,
+            dailyExclusions
+        );
 
-        // Backfill loop if we don't have enough
-        let backfillAttempts = 0;
-
-        while (validated.length < targetCount && backfillAttempts < this.MAX_BACKFILL_ATTEMPTS && failed.length > 0) {
-            backfillAttempts++;
-            const needed = targetCount - validated.length;
-
-            console.log(`[ValidatedQueue] Backfill attempt ${backfillAttempts}: need ${needed} more tracks`);
-
-            const backfillContext: BackfillContext = {
-                ...context,
-                failedTracks: failed,
-                existingTracks: validated
-            };
-
-            // Request more tracks from Gemini
-            const backfillSuggestions = await this.getBackfillTracks(
-                needed + 3, // Request extra to account for potential failures
-                backfillContext,
-                dailyExclusions
-            );
-
-            if (backfillSuggestions.length === 0) {
-                console.log('[ValidatedQueue] Backfill returned no suggestions, stopping');
-                break;
-            }
-
-            // Validate backfill
-            const backfillResult = await this.validateBatch(backfillSuggestions);
-            validated = [...validated, ...backfillResult.validated];
-            failed = backfillResult.failed;
-
-            console.log(`[ValidatedQueue] After backfill: ${validated.length} validated`);
-        }
-
-        // Trim to exact target count
-        const final = validated.slice(0, targetCount);
+        const final = validatedWithBackfill.slice(0, targetCount);
         console.log(`[ValidatedQueue] Final result: ${final.length}/${targetCount} tracks`);
 
         return final;
     }
 
     /**
-     * Convenience method for vibe options (returns options with validated seed tracks)
-     * Now targets 8 minimum from 16 input options
+     * Validate vibe options in parallel
      */
-    async validateVibeOptions(
-        options: any[],
-        targetCount: number = 8
-    ): Promise<any[]> {
-        console.log(`[ValidatedQueue] Validating ${options.length} vibe options, target: ${targetCount} minimum`);
-
-        const dailyExclusions = await dbService.getDailyHistory();
-        this.addToSeenUris(dailyExclusions);
-
+    private async validateOptions(options: any[]): Promise<{
+        validated: any[];
+        failed: any[];
+    }> {
         const validatedOptions: any[] = [];
         const failedOptions: any[] = [];
 
-        // Validate each option's seed track in parallel
         const results = await Promise.all(
             options.map(async (opt) => {
                 const suggestion: RawTrackSuggestion = {
@@ -385,55 +606,97 @@ Pick well-known tracks that definitely exist on Spotify. Major label artists pre
             } else {
                 failedOptions.push(option);
             }
-
-            if (validatedOptions.length >= targetCount) break;
         }
 
-        // If we don't have enough, request backfill options
-        if (validatedOptions.length < targetCount && failedOptions.length > 0) {
-            console.log(`[ValidatedQueue] Need ${targetCount - validatedOptions.length} more vibe options`);
+        return { validated: validatedOptions, failed: failedOptions };
+    }
 
-            const backfillSuggestions = await this.getBackfillTracks(
-                (targetCount - validatedOptions.length) + 2,
-                {
-                    type: 'vibe_options',
-                    failedTracks: failedOptions.map(o => ({
-                        title: o.track?.title,
-                        artist: o.track?.artist
-                    })),
-                    existingTracks: validatedOptions.map(o => ({
-                        title: o.track.title,
-                        artist: o.track.artist,
-                        uri: o.track.uri
-                    }))
-                },
-                dailyExclusions
-            );
+    /**
+     * Add backfill options to validated options
+     */
+    private async addBackfillOptions(
+        validatedOptions: any[],
+        failedOptions: any[],
+        targetCount: number,
+        dailyExclusions: string[]
+    ): Promise<any[]> {
+        if (validatedOptions.length >= targetCount || failedOptions.length === 0) {
+            return validatedOptions;
+        }
 
-            // Validate and add backfill options
-            for (const suggestion of backfillSuggestions) {
-                if (validatedOptions.length >= targetCount) break;
+        console.log(`[ValidatedQueue] Need ${targetCount - validatedOptions.length} more vibe options`);
 
-                const validated = await this.validateTrack(suggestion);
-                if (validated) {
-                    validatedOptions.push({
-                        id: `backfill_${validatedOptions.length}`,
-                        title: `${validated.artist} Vibes`,
-                        description: 'Alternative suggestion',
-                        track: {
-                            title: validated.title,
-                            artist: validated.artist,
-                            uri: validated.uri,
-                            artwork: validated.artwork
-                        },
-                        reason: 'Backfill option'
-                    });
-                }
+        const backfillSuggestions = await this.getBackfillTracks(
+            (targetCount - validatedOptions.length) + 2,
+            {
+                type: 'vibe_options',
+                failedTracks: failedOptions.map(o => ({
+                    title: o.track?.title,
+                    artist: o.track?.artist
+                })),
+                existingTracks: validatedOptions.map(o => ({
+                    title: o.track.title,
+                    artist: o.track.artist,
+                    uri: o.track.uri
+                }))
+            },
+            dailyExclusions
+        );
+
+        for (const suggestion of backfillSuggestions) {
+            if (validatedOptions.length >= targetCount) break;
+
+            const validated = await this.validateTrack(suggestion);
+            if (validated) {
+                validatedOptions.push({
+                    id: `backfill_${validatedOptions.length}`,
+                    title: `${validated.artist} Vibes`,
+                    description: 'Alternative suggestion',
+                    track: {
+                        title: validated.title,
+                        artist: validated.artist,
+                        uri: validated.uri,
+                        artwork: validated.artwork
+                    },
+                    reason: 'Backfill option'
+                });
             }
         }
 
-        console.log(`[ValidatedQueue] Returning ${validatedOptions.length} validated vibe options`);
-        return validatedOptions.slice(0, targetCount);
+        return validatedOptions;
+    }
+
+    /**
+     * Convenience method for vibe options (returns options with validated seed tracks)
+     * Now targets 8 minimum from 16 input options
+     */
+    async validateVibeOptions(
+        options: any[],
+        targetCount: number = 8
+    ): Promise<any[]> {
+        console.log(`[ValidatedQueue] Validating ${options.length} vibe options, target: ${targetCount} minimum`);
+
+        const dailyURIs = await dbService.getDailyHistoryURIs();
+        this.addToSeenUris(dailyURIs);
+        const dailyExclusions = await dbService.getDailyHistory();
+
+        const { validated: validatedOptions, failed: failedOptions } = await this.validateOptions(options);
+
+        // Early exit if we have enough
+        if (validatedOptions.length >= targetCount) {
+            console.log(`[ValidatedQueue] Returning ${validatedOptions.length} validated vibe options`);
+            return validatedOptions.slice(0, targetCount);
+        }
+
+        const withBackfill = await this.addBackfillOptions(
+            validatedOptions,
+            failedOptions,
+            targetCount,
+            dailyExclusions
+        );
+
+        console.log(`[ValidatedQueue] Returning ${withBackfill.length} validated vibe options`);
+        return withBackfill.slice(0, targetCount);
     }
 }
 

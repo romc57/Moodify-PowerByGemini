@@ -1,11 +1,23 @@
 import { ResponseType, useAuthRequest } from 'expo-auth-session';
 import { useEffect, useState } from 'react';
-import { dbService } from '../database/DatabaseService';
+import { Platform } from 'react-native';
+import { dbService } from '../database';
+import { SPOTIFY_AUTH_ENDPOINT, SPOTIFY_TOKEN_URL } from './constants';
 
 // Spotify OAuth discovery document
 const discovery = {
-    authorizationEndpoint: 'https://accounts.spotify.com/authorize',
-    tokenEndpoint: 'https://accounts.spotify.com/api/token',
+    authorizationEndpoint: SPOTIFY_AUTH_ENDPOINT,
+    tokenEndpoint: SPOTIFY_TOKEN_URL,
+};
+
+// Create platform-specific redirect URI
+const getRedirectUri = (): string => {
+    if (Platform.OS === 'web') {
+        // For web, use 127.0.0.1 as configured in Spotify Developer Dashboard
+        return 'http://127.0.0.1:8081/callback';
+    }
+    // For native apps, use the custom scheme with callback path to avoid 404s
+    return 'moodifymobile://callback';
 };
 
 /**
@@ -43,7 +55,7 @@ export const useSpotifyAuth = () => {
             ],
             usePKCE: true,
             responseType: ResponseType.Code,
-            redirectUri: 'moodifymobile://redirect',
+            redirectUri: getRedirectUri(),
         },
         discovery
     );
@@ -63,7 +75,8 @@ export const useSpotifyAuth = () => {
 
     const exchangeCodeForToken = async (code: string, codeVerifier: string, currentClientId: string) => {
         try {
-            const redirectUri = 'moodifymobile://redirect';
+            const currentRedirectUri = getRedirectUri();
+            console.log('[SpotifyAuth] Token exchange using redirect URI:', currentRedirectUri);
 
             const tokenResponse = await fetch(discovery.tokenEndpoint, {
                 method: 'POST',
@@ -74,7 +87,7 @@ export const useSpotifyAuth = () => {
                     client_id: currentClientId,
                     grant_type: 'authorization_code',
                     code,
-                    redirect_uri: redirectUri,
+                    redirect_uri: currentRedirectUri,
                     code_verifier: codeVerifier,
                 }).toString(),
             });

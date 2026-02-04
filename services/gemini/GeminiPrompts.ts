@@ -1,4 +1,8 @@
 export const GeminiPrompts = {
+  /**
+   * DJ Recommendation - Single seed track for Spotify Radio
+   * Output: { reasoning, items: [{ type, title, artist, reason, query }] }
+   */
   generateDJRecommendation: (
     recentHistory: any[],
     favorites: string[],
@@ -6,147 +10,111 @@ export const GeminiPrompts = {
     userInstruction: string,
     strategy: 'conservative' | 'exploratory' | 'refined' = 'conservative',
     triggerCount: number = 0
-  ) => `
-You are Moodify, an expert AI DJ. Respond with valid JSON only.
+  ) => {
+    const historyCompact = recentHistory.slice(0, 8).map((h: any) =>
+      `${h.track_name}|${h.artist_name}|${h.skipped ? 'S' : 'P'}`
+    ).join(';');
 
-Analyze the listening session and recommend exactly 1 song for Spotify Radio seeding.
+    const strategyHint = strategy === 'conservative' ? 'similar'
+      : strategy === 'exploratory' ? 'new-genre-same-energy' : 'analyze-skips';
 
-Strategy: ${strategy.toUpperCase()} (Trigger: ${triggerCount + 1})
-${strategy === 'conservative'
-      ? `Stay close to current style. Fresh but safe.`
-      : strategy === 'exploratory'
-        ? `Calculated risks. Same energy/mood, different genre/era.`
-        : `Analyze skip patterns. Find the sweet spot.`}
+    return `JSON. 1 seed track for Spotify Radio.
+H(already played):${historyCompact}
+Skip/5m:${skipRate}|Fav:${favorites.slice(0, 5).join(',')}
+Mode:${strategyHint}|${userInstruction || 'auto'}
+Rules:NEVER suggest songs from H list,popular,no mega-hits
+{"reasoning":"1 line","items":[{"type":"track","title":"X","artist":"Y","reason":"Z","query":"X Y"}]}`;
+  },
 
-Context:
-Recent:
-${recentHistory.map((h: any) => `- "${h.track_name}" by ${h.artist_name} [${h.skipped ? 'SKIP' : 'PLAY'}]`).join('\n')}
-
-Stats: ${skipRate} skips/5min
-Favorites: ${favorites.slice(0, 10).join(', ') || 'None'}
-Request: ${userInstruction || 'Use patterns'}
-
-Constraints:
-1. Exact 1 track
-2. NOT in Recent list
-3. Moderate-high popularity
-4. If skip_rate > 2, shift direction
-5. No mega-hits, prefer deep cuts
-
-Output JSON:
-{
-  "reasoning": "1-2 sentences",
-  "items": [
-    {
-      "type": "track",
-      "title": "Exact Title",
-      "artist": "Primary Artist",
-      "reason": "Why it fits",
-      "query": "Title Artist"
-    }
-  ]
-}`,
-
+  /**
+   * Vibe Options - 16 distinct mood-based playlists with seed tracks
+   * Request 16 to get 8+ after Spotify validation failures
+   * Output: { options: [{ id, title, description, track: { title, artist }, reason }] }
+   */
   generateVibeOptionsPrompt: (
     recentHistory: any[],
     favorites: string[],
     userInstruction: string,
     excludeTracks: string[] = []
   ) => {
-    // Optimized: condensed format, fewer items (10 instead of 12), lean schema
-    const excludeText = excludeTracks.length > 0
-      ? `CRITICAL: DO NOT PLAY these songs (Heard Today): ${excludeTracks.slice(0, 50).join('; ')}`
-      : 'None';
+    const historyCompact = recentHistory.slice(0, 8).map((h: any) =>
+      `${h.track_name}|${h.artist_name}`
+    ).join(';');
 
-    const historySummary = recentHistory.slice(0, 10).map((h: any) =>
-      `${h.track_name} - ${h.artist_name}`
-    ).join('; ');
+    const favCompact = favorites.slice(0, 5).join(';');
+    const excludeCompact = excludeTracks.slice(0, 30).join(';');
 
-    return `
-JSON only. 16 vibe options with seed tracks. Pick POPULAR tracks that exist on Spotify.
-
-Recent: ${historySummary}
-Faves: ${favorites.slice(0, 7).join('; ') || 'None'}
-${userInstruction ? `Hint: ${userInstruction}` : ''}
-${excludeText}
-
-Rules: Diverse genres/eras. 2-4 word titles. Major label artists preferred. Include description.
-
-{"options":[{"id":"v1","title":"Vibe Name","description":"Short mood description","track":{"title":"Song Title","artist":"Artist Name"},"reason":"Why"}]}`;
+    return `JSON. 16 vibe options with POPULAR Spotify tracks.
+H:${historyCompact}
+Fav:${favCompact}
+${userInstruction ? `Hint:${userInstruction}` : ''}
+EXCLUDE(already played today):${excludeCompact}
+Rules:diverse genres/eras,major artists,2-4 word vibe names,NEVER suggest songs from EXCLUDE list
+{"options":[{"id":"v1","title":"Vibe Name","description":"mood","track":{"title":"Song","artist":"Artist"},"reason":"why"}]}`;
   },
 
+  /**
+   * Vibe Expansion - 15 tracks matching a seed track's vibe
+   * Request 15 to get 10+ after validation
+   * Output: { mood, items: [{ title, artist }] }
+   */
   generateVibeExpansionPrompt: (
     seedTrack: { title: string; artist: string },
     recentHistory: any[],
     favorites: string[],
     excludeTracks: string[] = []
   ) => {
-    // Optimized: minimal context, lean schema, emphasis on Spotify existence
-    const excludeText = excludeTracks.length > 0
-      ? `CRITICAL: DO NOT PLAY these songs (Heard Today): ${excludeTracks.slice(0, 50).join('; ')}`
-      : 'None';
+    const excludeCompact = excludeTracks.slice(0, 30).join(';');
 
-    return `
-JSON only. 12 tracks matching vibe of: ${seedTrack.title} - ${seedTrack.artist}
-
-${excludeText}
-
-Rules: Match energy/mood. POPULAR tracks on Spotify. Major artists. No seed track.
-
-{"mood":"short vibe description","items":[{"title":"Song","artist":"Artist"}]}`;
+    return `JSON. 15 tracks like: ${seedTrack.title}|${seedTrack.artist}
+EXCLUDE(already played today):${excludeCompact}
+Rules:match energy/mood,POPULAR on Spotify,major artists,no seed track,NEVER suggest songs from EXCLUDE list
+{"mood":"vibe","items":[{"title":"X","artist":"Y"}]}`;
   },
 
+  /**
+   * Rescue Vibe - Emergency direction change after 3+ skips
+   * Request 15 tracks to get 10+ after validation
+   * Output: { vibe, why, items: [{ title, artist }] }
+   */
   generateRescueVibePrompt: (
     recentSkips: any[],
     favorites: string[],
     excludeTracks: string[] = []
   ) => {
-    // Optimized: condensed skip info, emphasis on direction change and Spotify existence
-    const skipSummary = recentSkips.map((s: any) =>
-      `${s.track_name} - ${s.artist_name}`
-    ).join('; ');
+    const skipsCompact = recentSkips.slice(0, 5).map((s: any) =>
+      `${s.track_name}|${s.artist_name}`
+    ).join(';');
 
-    const excludeText = excludeTracks.length > 0
-      ? `CRITICAL: DO NOT PLAY these songs (Heard Today): ${excludeTracks.slice(0, 50).join('; ')}`
-      : 'None';
+    const favCompact = favorites.slice(0, 5).join(';');
+    const excludeCompact = excludeTracks.slice(0, 30).join(';');
 
-    return `
-JSON only. User skipping these - change direction completely. 12 POPULAR tracks on Spotify.
-
-Skipped: ${skipSummary}
-Faves: ${favorites.slice(0, 7).join('; ')}
-${excludeText}
-
-Analyze skips → avoid similar. Pick NEW genre/energy. Major label artists.
-
-{"vibe":"2-4 word name","why":"1 sentence strategy","items":[{"title":"Song","artist":"Artist"}]}`;
+    return `JSON. User skipping - change direction. 15 POPULAR Spotify tracks.
+Skipped:${skipsCompact}
+Fav:${favCompact}
+EXCLUDE(already played today):${excludeCompact}
+Rules:avoid similar to skipped,new genre/energy,major artists,NEVER suggest songs from EXCLUDE list
+{"vibe":"2-4 words","why":"strategy","items":[{"title":"X","artist":"Y"}]}`;
   },
 
+  /**
+   * Mood Assessment - Analyze user's current listening mood
+   * Output: { mood, mood_description, energy_level, recommended_direction }
+   */
   generateMoodAssessmentPrompt: (
     currentTrack: { title: string; artist: string } | null,
     recentHistory: any[],
     userContext?: string
   ) => {
-    const trackInfo = currentTrack
-      ? `Playing: "${currentTrack.title}" by ${currentTrack.artist}`
-      : 'None';
+    const nowPlaying = currentTrack ? `${currentTrack.title}|${currentTrack.artist}` : 'none';
+    const historyCompact = recentHistory.slice(0, 8).map((h: any) =>
+      `${h.track_name}|${h.artist_name}`
+    ).join(';');
 
-    return `
-You are Moodify. Assess the user's mood. Respond with valid JSON only.
-
-Context:
-${trackInfo}
-Recent:
-${recentHistory.slice(0, 10).map((h: any) => `- "${h.track_name}" by ${h.artist_name}`).join('\n')}
-${userContext ? `User: ${userContext}` : ''}
-
-Output JSON:
-{
-  "mood": "1 word (energetic, chill, etc)",
-  "mood_description": "2-3 sentences",
-  "energy_level": "low/medium/high",
-  "recommended_direction": "keep_current/shift_energy/change_genre"
-}`;
+    return `JSON. Assess listening mood.
+Now:${nowPlaying}
+H:${historyCompact}
+${userContext ? `Ctx:${userContext}` : ''}
+{"mood":"word","mood_description":"2-3 sentences","energy_level":"low|medium|high","recommended_direction":"keep_current|shift_energy|change_genre"}`;
   }
 };
-

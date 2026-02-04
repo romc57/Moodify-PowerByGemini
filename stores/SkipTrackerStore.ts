@@ -1,4 +1,4 @@
-import { dbService } from '@/services/database/DatabaseService';
+import { dbService } from '@/services/database';
 import { create } from 'zustand';
 
 interface SkipEvent {

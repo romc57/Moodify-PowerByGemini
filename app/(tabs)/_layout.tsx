@@ -124,14 +124,25 @@ const TabBarBackground = () => {
   );
 };
 
-import { registerBackgroundTask } from '@/BackgroundTask';
-
-// Register background tasks
-registerBackgroundTask();
+import { usePlayerStore } from '@/stores/PlayerStore';
 
 export default function TabLayout() {
   const { theme } = useSettingsStore();
   const activeTheme = THEMES[theme] || THEMES.midnight;
+
+  // Sync with Spotify on app load - always show current playback
+  useEffect(() => {
+    const initSync = async () => {
+      console.log('[TabLayout] Syncing with Spotify...');
+      await usePlayerStore.getState().syncFromSpotify();
+      usePlayerStore.getState().startAutoSync(5000);
+    };
+    initSync();
+
+    return () => {
+      usePlayerStore.getState().stopAutoSync();
+    };
+  }, []);
 
   return (
     <>

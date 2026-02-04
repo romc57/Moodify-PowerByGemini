@@ -40,15 +40,9 @@ export function useAutoDJ() {
 
             console.log(`[AutoDJ] Rescue Check. Skips: ${consecutiveSkips}, Locked: ${processingLock.current ? 'YES' : 'NO'}`);
 
-
-
-            // Double check locking (redundant but safe)
-            if (processingLock.current) return;
-
-            // Wait for any existing operation to complete
+            // Prevent concurrent operations
             if (processingLock.current) {
                 console.warn('[AutoDJ] Rescue BLOCKED by existing operation lock.');
-                await processingLock.current;
                 return;
             }
 
@@ -63,7 +57,8 @@ export function useAutoDJ() {
             processingLock.current = (async () => {
                 try {
                     // 1. Audio Feedback (Immediate)
-                    await voiceService.playMoodAdjustmentIntro();
+                    // Don't pause music while searching (shouldPause=false, autoResume=true)
+                    await voiceService.playMoodAdjustmentIntro(false, true);
                     usePlayerStore.getState().setMood("Getting a new vibe...");
 
                     // Pause playback during fetch to prevent more skips/noise
@@ -83,28 +78,28 @@ export function useAutoDJ() {
                         // 3. Announce FIRST
                         // We do this before playing so the intro leads into the song
                         try {
-                            await voiceService.playSongIntro(firstTrack.title, firstTrack.artist);
+                            // Pause old song, announce new song, but don't auto-resume (let playVibe handle start)
+                            await voiceService.playSongIntro(firstTrack.title, firstTrack.artist, true, false);
                         } catch (e) { console.warn('[AutoDJ] Voice intro failed:', e); }
 
-                        // 4. Play List (Force context reset)
-                        await usePlayerStore.getState().playList(tracksToPlay, 0);
+                        // 4. Play Vibe (Replaces Context completely)
+                        // Using playVibe ensures we replace the queue and avoid "Up Next" issues
+                        await usePlayerStore.getState().playVibe(tracksToPlay);
                         usePlayerStore.getState().setMood(newVibe);
 
                         recordAITrigger(result.reasoning);
 
                         // Reset trackers
                         reset();
-                        setRescueMode(false);
                     } else {
                         throw new Error("Rescue returned no items");
                     }
                 } catch (e) {
                     console.error('[AutoDJ] Rescue failed', e);
-                    setRescueMode(false);
                     resetSkipCount(); // Reset to allow retry
                 } finally {
                     processingLock.current = null;
-                    setRescueMode(false);
+                    setRescueMode(false); // Always reset rescue mode when done
                 }
             })();
 

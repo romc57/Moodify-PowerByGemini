@@ -8,7 +8,10 @@
       ]
     },
     "skipLibCheck": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "types": [
+      "jest"
+    ]
   },
   "include": [
     "**/*.ts",

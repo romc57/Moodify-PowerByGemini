@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { DEFAULT_THEME, ThemeName } from '../constants/theme';
-import { dbService } from '../services/database/DatabaseService';
+import { dbService } from '../services/database';
 
 interface SettingsState {
     theme: ThemeName;

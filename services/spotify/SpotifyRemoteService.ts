@@ -1,8 +1,13 @@
+import { SpotifyErrors } from '@/services/core/ServiceError';
+import { useErrorStore } from '@/stores/ErrorStore';
 import axios from 'axios';
-import { dbService } from '../database/DatabaseService';
+import { dbService } from '../database';
+import { SPOTIFY_API_BASE, SPOTIFY_TOKEN_URL } from './constants';
 
-const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
-const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
+/**
+ * Auth status for external access
+ */
+export type AuthFailReason = 'invalid_client' | 'invalid_grant' | 'network' | 'unknown' | null;
 
 /**
  * Get Spotify Client ID from database (user-entered in settings)
@@ -16,12 +21,64 @@ export class SpotifyRemoteService {
     private static instance: SpotifyRemoteService;
     private authFailed: boolean = false;
     private lastAuthFailTime: number = 0;
+    private lastAuthFailReason: AuthFailReason = null;
     private readonly AUTH_RETRY_DELAY_MS = 30000; // Wait 30s before retrying after auth failure
 
     private constructor() { }
 
+    /**
+     * Convert HTTP errors to typed playback errors
+     * Centralizes error handling for player control methods
+     */
+    private handlePlaybackError(e: any, context: string): never {
+        console.error(`[SpotifyRemote] ${context} Error`, e.response?.data || e.message);
+        if (e.response?.status === 404) {
+            throw new Error('NO_DEVICE');
+        }
+        if (e.response?.status === 403) {
+            throw new Error('PREMIUM_REQUIRED');
+        }
+        throw e;
+    }
+
+    /**
+     * Get the remaining time in auth lockout (ms)
+     * Returns 0 if not in lockout
+     */
+    getAuthLockoutRemaining(): number {
+        if (!this.authFailed) return 0;
+        const elapsed = Date.now() - this.lastAuthFailTime;
+        const remaining = this.AUTH_RETRY_DELAY_MS - elapsed;
+        return remaining > 0 ? remaining : 0;
+    }
+
+    /**
+     * Check if currently in auth lockout
+     */
+    isInAuthLockout(): boolean {
+        return this.getAuthLockoutRemaining() > 0;
+    }
+
+    /**
+     * Get current auth status for UI display
+     */
+    getAuthStatus(): {
+        isLocked: boolean;
+        lockoutRemainingMs: number;
+        lastFailReason: AuthFailReason;
+        lastFailTime: number | null;
+    } {
+        return {
+            isLocked: this.isInAuthLockout(),
+            lockoutRemainingMs: this.getAuthLockoutRemaining(),
+            lastFailReason: this.lastAuthFailReason,
+            lastFailTime: this.authFailed ? this.lastAuthFailTime : null
+        };
+    }
+
     static getInstance(): SpotifyRemoteService {
         if (!SpotifyRemoteService.instance) {
+            console.log('[SpotifyRemote] Initializing Service...');
             SpotifyRemoteService.instance = new SpotifyRemoteService();
         }
         return SpotifyRemoteService.instance;
@@ -46,6 +103,26 @@ export class SpotifyRemoteService {
     resetAuthState(): void {
         this.authFailed = false;
         this.lastAuthFailTime = 0;
+        this.lastAuthFailReason = null;
+        // Clear any Spotify errors from the store
+        useErrorStore.getState().clearError('spotify');
+    }
+
+    /**
+     * Mark auth as failed with reason
+     */
+    private markAuthFailed(reason: AuthFailReason): void {
+        this.authFailed = true;
+        this.lastAuthFailTime = Date.now();
+        this.lastAuthFailReason = reason;
+
+        // Emit to ErrorStore
+        const lockoutRemaining = this.AUTH_RETRY_DELAY_MS;
+        if (reason === 'invalid_client' || reason === 'invalid_grant') {
+            useErrorStore.getState().setError(SpotifyErrors.authExpired(`Auth failed: ${reason}`));
+        } else {
+            useErrorStore.getState().setError(SpotifyErrors.authLockout(lockoutRemaining));
+        }
     }
 
     private async getAccessToken(): Promise<string | null> {
@@ -70,8 +147,7 @@ export class SpotifyRemoteService {
         const clientId = await getSpotifyClientId();
         if (!clientId) {
             // Silently handle - user hasn't configured Spotify yet
-            this.authFailed = true;
-            this.lastAuthFailTime = Date.now();
+            this.markAuthFailed('invalid_client');
             return null;
         }
 
@@ -102,17 +178,72 @@ export class SpotifyRemoteService {
                 console.warn('[SpotifyRemote] Token refresh failed:', e.message);
             }
 
-            // Mark auth as failed to prevent infinite retry loops
-            if (errorData?.error === 'invalid_client' || errorData?.error === 'invalid_grant') {
-                this.authFailed = true;
-                this.lastAuthFailTime = Date.now();
-                // Clear invalid tokens to force re-authentication
+            // Mark auth as failed to prevent infinite retry loops with specific reason
+            if (errorData?.error === 'invalid_client') {
+                this.markAuthFailed('invalid_client');
                 await dbService.removeServiceToken('spotify');
+            } else if (errorData?.error === 'invalid_grant') {
+                this.markAuthFailed('invalid_grant');
+                await dbService.removeServiceToken('spotify');
+            } else if (e.message === 'Network Error') {
+                this.markAuthFailed('network');
+            } else {
+                this.markAuthFailed('unknown');
             }
         }
         return null;
     }
 
+    /**
+     * Build axios config for request
+     */
+    private buildRequestConfig(method: string, endpoint: string, token: string, data: any, params: any): any {
+        const config: any = {
+            method,
+            url: `${SPOTIFY_API_BASE}${endpoint}`,
+            params,
+            headers: { Authorization: `Bearer ${token}` }
+        };
+
+        if (method.toLowerCase() !== 'get' && method.toLowerCase() !== 'head') {
+            config.data = data;
+        }
+
+        return config;
+    }
+
+    /**
+     * Execute single request with retry logic
+     */
+    private async executeRequest(config: any, method: string, endpoint: string, retries = 3): Promise<any> {
+        const startTime = Date.now();
+        const logData = config.data && Object.keys(config.data).length > 0
+            ? JSON.stringify(config.data).substring(0, 100)
+            : '';
+        console.log(`[SpotifyRemote] ${method.toUpperCase()} ${endpoint}`, logData);
+
+        try {
+            const response = await axios(config);
+            console.log(`[SpotifyRemote] Response (${response.status}): ${Date.now() - startTime}ms`);
+            return response;
+        } catch (error: any) {
+            console.error(`[SpotifyRemote] Failed (${error.response?.status || 'Unknown'}): ${error.message}`);
+
+            const shouldRetry = (error.message === 'Network Error' ||
+                (error.response?.status >= 500)) && retries > 0;
+
+            if (shouldRetry) {
+                console.warn(`[SpotifyRemote] Retrying... (${retries} left)`);
+                await new Promise(r => setTimeout(r, 1000));
+                return this.executeRequest(config, method, endpoint, retries - 1);
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Main request handler with auth retry
+     */
     private async request(method: string, endpoint: string, data: any = {}, params: any = {}) {
         if (this.shouldSkipDueToAuthFailure()) {
             throw new Error('AUTH_FAILED');
@@ -121,38 +252,18 @@ export class SpotifyRemoteService {
         let token = await this.getAccessToken();
         if (!token) throw new Error('NO_TOKEN');
 
-        const makeRequest = async (t: string, retries = 3) => {
-            const config: any = {
-                method,
-                url: `${SPOTIFY_API_BASE}${endpoint}`,
-                params,
-                headers: { Authorization: `Bearer ${t}` }
-            };
-
-            if (method.toLowerCase() !== 'get' && method.toLowerCase() !== 'head') {
-                config.data = data;
-            }
-
-            try {
-                return await axios(config);
-            } catch (error: any) {
-                // Retry on Network Error or 5xx
-                if ((error.message === 'Network Error' || (error.response && error.response.status >= 500)) && retries > 0) {
-                    console.warn(`[SpotifyRemote] Request failed (${error.message}), retrying... (${retries} left)`);
-                    await new Promise(r => setTimeout(r, 1000)); // Wait 1s
-                    return makeRequest(t, retries - 1);
-                }
-                throw error;
-            }
+        const makeRequest = async (t: string) => {
+            const config = this.buildRequestConfig(method, endpoint, t, data, params);
+            return this.executeRequest(config, method, endpoint, 3);
         };
 
         try {
             return await makeRequest(token);
         } catch (error: any) {
-            if (error.response?.status === 401) {
-                // Silently attempt token refresh
+            // Handle 401 by refreshing token
+            if (error.response?.status === 401 || error.message === 'NO_TOKEN') {
                 token = await this.refreshAccessToken();
-                if (token) { // Changed from newToken to token to match the assignment above
+                if (token) {
                     return await makeRequest(token);
                 }
             }
@@ -162,21 +273,23 @@ export class SpotifyRemoteService {
 
     async play(uriOrUris?: string | string[]) {
         try {
+            console.log('[SpotifyRemote] Play Request:', uriOrUris);
             let body = {};
             if (uriOrUris) {
                 const uris = Array.isArray(uriOrUris) ? uriOrUris : [uriOrUris];
                 body = { uris };
+                console.log('[SpotifyRemote] Playing Request with URIs:', uris);
+            } else {
+                console.log('[SpotifyRemote] Playing Request (Resume)');
             }
+            // Add offset to ensure we play from start (critical for single tracks)
+            if (uriOrUris) {
+                (body as any).offset = { position: 0 };
+            }
+
             await this.request('put', '/me/player/play', body);
         } catch (e: any) {
-            console.error('[SpotifyRemote] Play Error', e);
-            if (e.response && e.response.status === 404) {
-                throw new Error('NO_DEVICE');
-            }
-            if (e.response && e.response.status === 403) {
-                throw new Error('PREMIUM_REQUIRED');
-            }
-            throw e;
+            this.handlePlaybackError(e, 'Play');
         }
     }
 
@@ -196,14 +309,7 @@ export class SpotifyRemoteService {
         try {
             await this.request('put', '/me/player/pause');
         } catch (e: any) {
-            console.error('[SpotifyRemote] Pause Error', e);
-            if (e.response && e.response.status === 404) {
-                throw new Error('NO_DEVICE');
-            }
-            if (e.response && e.response.status === 403) {
-                throw new Error('PREMIUM_REQUIRED');
-            }
-            throw e;
+            this.handlePlaybackError(e, 'Pause');
         }
     }
 
@@ -211,14 +317,7 @@ export class SpotifyRemoteService {
         try {
             await this.request('post', '/me/player/next');
         } catch (e: any) {
-            console.error('[SpotifyRemote] Next Error', e);
-            if (e.response && e.response.status === 404) {
-                throw new Error('NO_DEVICE');
-            }
-            if (e.response && e.response.status === 403) {
-                throw new Error('PREMIUM_REQUIRED');
-            }
-            throw e;
+            this.handlePlaybackError(e, 'Next');
         }
     }
 
@@ -226,14 +325,7 @@ export class SpotifyRemoteService {
         try {
             await this.request('post', '/me/player/previous');
         } catch (e: any) {
-            console.error('[SpotifyRemote] Previous Error', e);
-            if (e.response && e.response.status === 404) {
-                throw new Error('NO_DEVICE');
-            }
-            if (e.response && e.response.status === 403) {
-                throw new Error('PREMIUM_REQUIRED');
-            }
-            throw e;
+            this.handlePlaybackError(e, 'Previous');
         }
     }
 
@@ -385,49 +477,74 @@ export class SpotifyRemoteService {
     // Store callback reference to prevent memory leaks from closures
     private onTrackFinishedCallback: ((type: 'finish' | 'skip', track: any) => void) | null = null;
 
-    startPolling(onTrackFinished: (type: 'finish' | 'skip', track: any) => void) {
-        // Always clean up first to prevent memory leaks
-        this.stopPolling();
+    /**
+     * Determine if track finished or was skipped
+     */
+    private wasTrackFinished(): boolean {
+        const nearEnd = this.lastPositionMs > this.lastDurationMs * 0.9;
+        const almostDone = this.lastDurationMs - this.lastPositionMs < 5000;
+        const edgeCase = this.lastDurationMs === 0 && this.lastPositionMs > 0;
+        return nearEnd || almostDone || edgeCase;
+    }
 
-        // Store callback reference
+    /**
+     * Update tracking state from current item
+     */
+    private updateTrackingState(item: any, progressMs: number): void {
+        this.lastTrackId = item.id;
+        this.lastDurationMs = item.duration_ms;
+        this.lastPositionMs = progressMs;
+        this.lastTrackInfo = {
+            title: item.name,
+            artist: item.artists[0]?.name,
+            duration_ms: item.duration_ms,
+            uri: item.uri,
+            artwork: item.album?.images[0]?.url
+        };
+    }
+
+    /**
+     * Handle track change detection
+     */
+    private handleTrackChange(currentItemId: string): void {
+        if (!this.lastTrackId || this.lastTrackId === currentItemId) return;
+
+        const isFinished = this.wasTrackFinished();
+        if (this.lastTrackInfo && this.onTrackFinishedCallback) {
+            this.onTrackFinishedCallback(isFinished ? 'finish' : 'skip', this.lastTrackInfo);
+        }
+    }
+
+    /**
+     * Process polling response
+     */
+    private async processPollingResponse(): Promise<void> {
+        const response = await this.request('get', '/me/player');
+
+        if (!response?.data || response.status === 204 || !response.data.item) {
+            return;
+        }
+
+        const currentItem = response.data.item;
+        this.handleTrackChange(currentItem.id);
+        this.updateTrackingState(currentItem, response.data.progress_ms);
+    }
+
+    async startPolling(onTrackFinished: (type: 'finish' | 'skip', track: any) => void) {
+        this.stopPolling();
         this.onTrackFinishedCallback = onTrackFinished;
 
-        // Starting playback polling
+        console.log('[SpotifyRemote] Starting polling...');
+
         this.pollingInterval = setInterval(async () => {
             try {
-                const response = await this.request('get', '/me/player');
-                if (!response || !response.data || !response.data.item) return;
-
-                const currentItem = response.data.item;
-                const progressMs = response.data.progress_ms;
-
-                if (this.lastTrackId && this.lastTrackId !== currentItem.id) {
-                    // Track changed
-
-                    const isFinished = (this.lastPositionMs > this.lastDurationMs * 0.9) || (this.lastDurationMs - this.lastPositionMs < 10000);
-
-                    if (this.lastTrackInfo && this.onTrackFinishedCallback) {
-                        this.onTrackFinishedCallback(isFinished ? 'finish' : 'skip', this.lastTrackInfo);
-                    }
-                }
-
-                this.lastTrackId = currentItem.id;
-                this.lastDurationMs = currentItem.duration_ms;
-                this.lastPositionMs = progressMs;
-                this.lastTrackInfo = {
-                    title: currentItem.name,
-                    artist: currentItem.artists[0]?.name,
-                    duration_ms: currentItem.duration_ms,
-                    uri: currentItem.uri,
-                    artwork: currentItem.album?.images[0]?.url
-                };
+                await this.processPollingResponse();
             } catch (e: any) {
-                // Don't spam logs for expected auth/token errors
                 if (e.message !== 'NO_TOKEN' && e.message !== 'AUTH_FAILED') {
-                    console.warn('[SpotifyRemote] Polling error:', e.message || e);
+                    // Silent fail for polling errors
                 }
             }
-        }, 5000);
+        }, 1000);
     }
 
     async getCurrentState() {
@@ -439,8 +556,8 @@ export class SpotifyRemoteService {
         try {
             const response = await this.request('get', '/me/player');
 
-            // Silently handle auth failures
-            if (!response || response.status === 401 || response.status === 403) {
+            // Silently handle auth failures or no content
+            if (!response || response.status === 204 || response.status === 401 || response.status === 403) {
                 return null;
             }
 
@@ -490,6 +607,7 @@ export class SpotifyRemoteService {
             this.lastDurationMs = 0;
             this.lastPositionMs = 0;
             this.lastTrackInfo = null;
+            console.log('[SpotifyRemote] Polling stopped');
         }
     }
 }

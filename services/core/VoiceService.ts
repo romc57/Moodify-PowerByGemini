@@ -55,51 +55,70 @@ class VoiceService {
     /**
      * Play hardcoded mood adjustment intro announcement
      */
-    async playMoodAdjustmentIntro(): Promise<void> {
+    async playMoodAdjustmentIntro(shouldPause: boolean = true, autoResume: boolean = true): Promise<void> {
         const message = "I've noticed you're not feeling the vibe. Let me find something better for you.";
-        await this.speak(message);
+        await this.speak(message, shouldPause, autoResume);
     }
 
     /**
      * Play song intro announcement
      */
-    async playSongIntro(songTitle: string, artistName: string): Promise<void> {
+    async playSongIntro(songTitle: string, artistName: string, shouldPause: boolean = true, autoResume: boolean = true): Promise<void> {
         const message = `Here's ${songTitle} by ${artistName} to lift your mood.`;
-        await this.speak(message);
+        await this.speak(message, shouldPause, autoResume);
+    }
+
+    /**
+     * Speak text with timeout protection
+     */
+    private speakWithTimeout(text: string, timeoutMs: number = 10000): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                Speech.stop();
+                console.warn('[VoiceService] Speech timed out');
+                resolve(); // Resolve instead of reject to prevent blocking
+            }, timeoutMs);
+
+            Speech.speak(text, {
+                language: 'en-US',
+                pitch: 1.0,
+                rate: 0.9,
+                onDone: () => {
+                    clearTimeout(timeout);
+                    resolve();
+                },
+                onError: (error) => {
+                    clearTimeout(timeout);
+                    console.error('[VoiceService] Speech error:', error);
+                    resolve(); // Resolve to prevent blocking
+                }
+            });
+        });
     }
 
     /**
      * Speak text using TTS with Spotify coordination
      */
-    private async speak(text: string): Promise<void> {
+    private async speak(text: string, shouldPause: boolean = true, autoResume: boolean = true): Promise<void> {
         try {
             console.log('[VoiceService] Speaking:', text);
 
             // Pause Spotify
-            await this.pauseSpotifyIfPlaying();
+            if (shouldPause) {
+                await this.pauseSpotifyIfPlaying();
+            }
 
-            // Speak the text
-            await new Promise<void>((resolve, reject) => {
-                Speech.speak(text, {
-                    language: 'en-US',
-                    pitch: 1.0,
-                    rate: 0.9,
-                    onDone: () => resolve(),
-                    onError: (error) => {
-                        console.error('[VoiceService] Speech error:', error);
-                        reject(error);
-                    }
-                });
-            });
+            // Speak the text with timeout protection
+            await this.speakWithTimeout(text, 10000);
 
             // Small delay for natural transition
             await new Promise(r => setTimeout(r, 300));
 
-        } catch (error) {
-            console.error('[VoiceService] Speak error:', error);
         } finally {
-            // Always try to resume Spotify
-            await this.resumeSpotifyIfWasPlaying();
+            // Resume Spotify only if requested
+            if (shouldPause && autoResume) {
+                await this.resumeSpotifyIfWasPlaying();
+            }
         }
     }
 
@@ -107,26 +126,15 @@ class VoiceService {
      * Play announcement with fade transition
      * This version includes a fade effect by gradually resuming Spotify
      */
-    async playWithFade(text: string): Promise<void> {
+    async playWithFade(text: string, autoResume: boolean = true): Promise<void> {
         try {
             console.log('[VoiceService] Speaking with fade:', text);
 
             // Pause Spotify
             await this.pauseSpotifyIfPlaying();
 
-            // Speak the text
-            await new Promise<void>((resolve, reject) => {
-                Speech.speak(text, {
-                    language: 'en-US',
-                    pitch: 1.0,
-                    rate: 0.9,
-                    onDone: () => resolve(),
-                    onError: (error) => {
-                        console.error('[VoiceService] Speech error:', error);
-                        reject(error);
-                    }
-                });
-            });
+            // Speak the text with timeout protection
+            await this.speakWithTimeout(text, 10000);
 
             // Fade transition: wait a bit longer before resuming
             await new Promise(r => setTimeout(r, 800));
@@ -135,7 +143,9 @@ class VoiceService {
             console.error('[VoiceService] Speak with fade error:', error);
         } finally {
             // Resume Spotify
-            await this.resumeSpotifyIfWasPlaying();
+            if (autoResume) {
+                await this.resumeSpotifyIfWasPlaying();
+            }
         }
     }
 
@@ -151,14 +161,23 @@ class VoiceService {
     }
 
     /**
-     * Check if speech is available
+     * Check if speech synthesis is currently active
      */
-    async isSpeechAvailable(): Promise<boolean> {
+    async isSpeaking(): Promise<boolean> {
         try {
             return await Speech.isSpeakingAsync();
         } catch {
             return false;
         }
+    }
+
+    /**
+     * Check if TTS is available on this device
+     * Note: expo-speech doesn't provide a direct availability check,
+     * so we assume it's available and handle errors gracefully
+     */
+    isSpeechAvailable(): boolean {
+        return true; // expo-speech handles unavailability internally
     }
 }
 
