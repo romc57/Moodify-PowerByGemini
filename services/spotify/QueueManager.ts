@@ -106,10 +106,8 @@ async function addTracksToQueue(
  * Replace the current queue with new tracks
  *
  * Strategy:
- * 1. Play the first track to create a new playback context
- * 2. Wait for Spotify to confirm playback started
- * 3. Add remaining tracks to queue one by one
- * 4. Verify the queue contains expected tracks
+ * Pass ALL tracks to the play command to create a proper multi-track context.
+ * This ensures next/prev work correctly and tracks play sequentially.
  */
 export async function replaceQueue(
     tracks: QueuedTrack[]
@@ -122,45 +120,17 @@ export async function replaceQueue(
     const remainingTracks = tracks.slice(1);
 
     try {
-        // Step 1: Play first track to establish new context
-        console.log(`[QueueManager] Playing first track: ${firstTrack.title}`);
-        await spotifyRemote.play([firstTrack.uri]);
+        // Play ALL tracks to create a proper multi-track context
+        const allUris = tracks.map(t => t.uri);
+        await spotifyRemote.play(allUris);
 
-        // Step 2: Wait for playback to start
-        const isPlaying = await waitForTrackToPlay(firstTrack.uri, 5000);
-        if (!isPlaying) {
-            console.warn('[QueueManager] Track did not start playing in time');
-            // Continue anyway - it might still work
-        }
-
-        // Step 3: Add remaining tracks to queue
-        if (remainingTracks.length > 0) {
-            console.log(`[QueueManager] Adding ${remainingTracks.length} tracks to queue`);
-            const { successes, failures } = await addTracksToQueue(remainingTracks);
-
-            if (failures.length > 0) {
-                console.warn(`[QueueManager] ${failures.length} tracks failed to queue`);
-            }
-
-            // Step 4: Verify queue (optional, for debugging)
-            const expectedUris = successes.map(t => t.uri);
-            const { verified } = await verifyQueue(expectedUris, 2000);
-
-            if (!verified) {
-                console.warn('[QueueManager] Queue verification failed');
-            }
-
-            return {
-                success: true,
-                playingTrack: firstTrack,
-                queuedTracks: successes
-            };
-        }
+        // Wait for playback to start
+        await waitForTrackToPlay(firstTrack.uri, 5000);
 
         return {
             success: true,
             playingTrack: firstTrack,
-            queuedTracks: []
+            queuedTracks: remainingTracks
         };
 
     } catch (error: any) {
@@ -180,7 +150,8 @@ export async function replaceQueue(
 export async function appendToQueue(
     tracks: QueuedTrack[]
 ): Promise<{ added: QueuedTrack[]; failed: QueuedTrack[] }> {
-    return addTracksToQueue(tracks, 200);
+    const { successes, failures } = await addTracksToQueue(tracks, 200);
+    return { added: successes, failed: failures };
 }
 
 /**

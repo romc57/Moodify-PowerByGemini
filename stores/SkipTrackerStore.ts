@@ -1,4 +1,5 @@
 import { dbService } from '@/services/database';
+import { graphService } from '@/services/graph/GraphService';
 import { create } from 'zustand';
 
 interface SkipEvent {
@@ -101,6 +102,18 @@ export const useSkipTracker = create<SkipTrackerState>((set, get) => ({
             wasSkipped,
             { duration }
         );
+
+        // Update Graph (Real-time Learning)
+        if (!wasSkipped && currentTrackName) {
+            // we fire and forget to not block UI
+            graphService.getEffectiveNode('SONG', currentTrackName, currentTrackId, { artist: currentArtist })
+                .then(node => {
+                    if (node) {
+                        graphService.recordPlay(node.id);
+                    }
+                })
+                .catch(e => console.error('[SkipTracker] Graph update failed', e));
+        }
 
         // Record the event
         const skipEvent: SkipEvent = {

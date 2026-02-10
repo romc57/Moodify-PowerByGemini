@@ -11,8 +11,9 @@ import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Tabs } from 'expo-router';
+import { usePlayerStore } from '@/stores/PlayerStore';
 import React, { useEffect } from 'react';
-import { Platform, Pressable, StyleSheet, View } from 'react-native';
+import { AppState, AppStateStatus, Platform, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -64,12 +65,14 @@ const AnimatedTabIcon = ({
   );
 };
 
-// Custom Tab Bar Button with Haptics
+// Custom Tab Bar Button with Haptics (no-op on web)
 const HapticTabButton = (props: any) => {
   const { onPress, onLongPress, ...rest } = props;
 
   const handlePress = (e: any) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
     onPress?.(e);
   };
 
@@ -86,60 +89,75 @@ const HapticTabButton = (props: any) => {
   );
 };
 
-// Tab Bar Background Component
+// Tab Bar Background Component (web uses plain View to avoid native module issues)
 const TabBarBackground = () => {
   const { theme } = useSettingsStore();
   const activeTheme = THEMES[theme] || THEMES.midnight;
+  const borderTop = <View style={[styles.borderTop, { backgroundColor: activeTheme.border }]} />;
 
+  if (Platform.OS === 'web') {
+    return (
+      <View style={[StyleSheet.absoluteFill, styles.blurContainer, { backgroundColor: 'rgba(10, 10, 20, 0.98)' }]}>
+        {borderTop}
+      </View>
+    );
+  }
   if (Platform.OS === 'ios') {
     return (
-      <BlurView
-        intensity={80}
-        tint="dark"
-        style={[StyleSheet.absoluteFill, styles.blurContainer]}
-      >
-        <View
-          style={[
-            styles.borderTop,
-            { backgroundColor: activeTheme.border },
-          ]}
-        />
+      <BlurView intensity={80} tint="dark" style={[StyleSheet.absoluteFill, styles.blurContainer]}>
+        {borderTop}
       </BlurView>
     );
   }
-
-  // Android fallback
   return (
     <LinearGradient
       colors={['rgba(10, 10, 20, 0.98)', 'rgba(5, 5, 15, 0.99)']}
       style={StyleSheet.absoluteFill}
     >
-      <View
-        style={[
-          styles.borderTop,
-          { backgroundColor: activeTheme.border },
-        ]}
-      />
+      {borderTop}
     </LinearGradient>
   );
 };
-
-import { usePlayerStore } from '@/stores/PlayerStore';
 
 export default function TabLayout() {
   const { theme } = useSettingsStore();
   const activeTheme = THEMES[theme] || THEMES.midnight;
 
-  // Sync with Spotify on app load - always show current playback
+  // Sync with Spotify on app load; keep polling running (never stop on tab switch so skip detection works in background)
   useEffect(() => {
     const initSync = async () => {
-      console.log('[TabLayout] Syncing with Spotify...');
-      await usePlayerStore.getState().syncFromSpotify();
-      usePlayerStore.getState().startAutoSync(5000);
+      try {
+        console.log('[TabLayout] Syncing with Spotify...');
+        await usePlayerStore.getState().syncFromSpotify();
+        usePlayerStore.getState().startAutoSync(5000);
+      } catch (e) {
+        console.warn('[TabLayout] Initial sync failed:', e);
+      }
     };
     initSync();
 
+    let appStateSub: { remove: () => void } | null = null;
+    if (Platform.OS !== 'web' && typeof AppState !== 'undefined' && AppState.addEventListener) {
+      const handleAppStateChange = (state: AppStateStatus) => {
+        if (state === 'active') usePlayerStore.getState().syncFromSpotify();
+      };
+      appStateSub = AppState.addEventListener('change', handleAppStateChange);
+    }
+
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        usePlayerStore.getState().syncFromSpotify();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibility);
+    }
+
     return () => {
+      if (appStateSub?.remove) appStateSub.remove();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibility);
+      }
       usePlayerStore.getState().stopAutoSync();
     };
   }, []);

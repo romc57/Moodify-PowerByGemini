@@ -10,7 +10,7 @@ import { recommendationService } from '../../services/core/RecommendationService
 import { validatedQueueService } from '../../services/core/ValidatedQueueService';
 import { gemini } from '../../services/gemini/GeminiService';
 import { dbService } from '../../services/database';
-import { hasGeminiKeys, hasSpotifyKeys, initializeTestDatabase, getIntegrationSessionStatus } from '../utils/testDb';
+import { hasGeminiKeys, hasSpotifyKeys, initializeTestDatabase, getIntegrationSessionStatus, ensureFreshSpotifyToken } from '../utils/testDb';
 import { waitForApiCall, logTestData } from '../utils/testApiKeys';
 import { getPlaybackTracker, resetPlaybackTracker } from '../utils/PlaybackTracker';
 
@@ -36,6 +36,9 @@ describe('Gemini → Spotify Integration Tests (Real API)', () => {
         console.log('[Integration] Initializing test database...');
         await initializeTestDatabase();
 
+        // Ensure we have a fresh token before starting tests
+        await ensureFreshSpotifyToken();
+
         const status = await getIntegrationSessionStatus();
         sessionsActive = status.runGeminiAndSpotify;
 
@@ -48,9 +51,11 @@ describe('Gemini → Spotify Integration Tests (Real API)', () => {
         console.log('[Integration] Sessions active, ready for testing');
     }, 30000);
 
-    beforeEach(() => {
+    beforeEach(async () => {
         validatedQueueService.clearSession();
         tracker.reset();
+        // Ensure token is fresh before each test
+        await ensureFreshSpotifyToken();
     });
 
     afterAll(() => {
@@ -62,10 +67,16 @@ describe('Gemini → Spotify Integration Tests (Real API)', () => {
             const query = 'happy upbeat music';
             console.log(`[Test] Getting vibe options for: "${query}"`);
 
-            const result = await waitForApiCall(
-                () => recommendationService.getVibeOptions(query),
-                60000
-            );
+            let result: any[] = [];
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                result = await waitForApiCall(
+                    () => recommendationService.getVibeOptions(query),
+                    60000
+                );
+                if (result && result.length > 0) break;
+                console.log(`[Test] Gemini returned empty, retrying (${attempt}/3)...`);
+                await new Promise(r => setTimeout(r, 2000));
+            }
 
             // Log all recommendations for tracking
             if (Array.isArray(result)) {
@@ -177,7 +188,7 @@ describe('Gemini → Spotify Integration Tests (Real API)', () => {
 
             const history = await dbService.getRecentHistory(20);
             const options = await waitForApiCall(
-                () => gemini.getVibeOptions(history || [], [], 'test vibe', []),
+                () => gemini.getVibeOptions(history || [], [], [], 'test vibe'),
                 60000
             );
 

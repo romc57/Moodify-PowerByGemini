@@ -14,12 +14,12 @@ export interface GeminiModel {
     tier: 'pro' | 'flash';
 }
 
-// Token limits for different operation types (halved from original values)
+// Token limits for different operation types
 export const TOKEN_LIMITS = {
-    LARGE: 4096,       // Original: 8000 (getVibeOptions, generateRescueVibe)
-    MEDIUM: 2048,      // Original: 3500 (expandVibe)
-    STANDARD: 1024,    // Original: 2000 (generateDJRecommendation, backfill)
-    SMALL: 768,        // Original: 1500 (assessCurrentMood) - rounded to 768
+    LARGE: 8192,       // For complex responses (getVibeOptions, generateRescueVibe)
+    MEDIUM: 4096,      // For medium responses (expandVibe)
+    STANDARD: 2048,    // For standard responses (generateDJRecommendation, backfill)
+    SMALL: 1024,       // For simple responses (assessCurrentMood)
 } as const;
 
 // Available models
@@ -61,8 +61,8 @@ export const GEMINI_MODELS: Record<ModelId, GeminiModel> = {
 // Model priority for fallback (in order)
 export const MODEL_PRIORITY: ModelId[] = ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-2.5-flash'];
 
-// Default model - Gemini 2.5 Pro (Stable) due to 3.0 quota limits
-export const DEFAULT_MODEL: ModelId = 'gemini-2.5-pro';
+// Default model - Gemini 3 Pro
+export const DEFAULT_MODEL: ModelId = 'gemini-3-pro';
 
 // Legacy exports for backwards compatibility
 export const GEMINI_API_URL = GEMINI_MODELS[DEFAULT_MODEL].url;

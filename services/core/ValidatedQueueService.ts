@@ -362,6 +362,9 @@ class ValidatedQueueService {
     /**
      * Validate multiple tracks in parallel
      * Returns both validated tracks and failed suggestions
+     *
+     * Note: Parallel validation can cause race conditions with seenUris,
+     * so we dedupe by URI after validation completes.
      */
     async validateBatch(suggestions: RawTrackSuggestion[]): Promise<{
         validated: ValidatedTrack[];
@@ -377,9 +380,17 @@ class ValidatedQueueService {
 
         const validated: ValidatedTrack[] = [];
         const failed: RawTrackSuggestion[] = [];
+        const seenInBatch = new Set<string>(); // Dedupe within this batch
 
         for (const result of results) {
             if (result.validated) {
+                // Dedupe: skip if we already have this URI in this batch
+                if (seenInBatch.has(result.validated.uri)) {
+                    console.log(`[ValidatedQueue] Batch dedupe: skipping duplicate ${result.validated.title}`);
+                    failed.push(result.original);
+                    continue;
+                }
+                seenInBatch.add(result.validated.uri);
                 result.success = true;
                 validated.push(result.validated);
             } else {
@@ -564,7 +575,12 @@ Pick well-known tracks that definitely exist on Spotify. Major label artists pre
         );
 
         const final = validatedWithBackfill.slice(0, targetCount);
-        console.log(`[ValidatedQueue] Final result: ${final.length}/${targetCount} tracks`);
+
+        // Log final validated tracks
+        console.log(`[ValidatedQueue] Final ${final.length} validated tracks:`);
+        final.forEach((t, i) => {
+            console.log(`  ${i + 1}. "${t.title}" - ${t.artist} [${t.uri}]`);
+        });
 
         return final;
     }

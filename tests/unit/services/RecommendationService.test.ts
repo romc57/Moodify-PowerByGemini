@@ -2,14 +2,26 @@
 import { recommendationService } from '../../../services/core/RecommendationService';
 import { validatedQueueService } from '../../../services/core/ValidatedQueueService';
 import { gemini } from '../../../services/gemini/GeminiService';
-import { hasGeminiKeys, hasSpotifyKeys, initializeTestDatabase, getIntegrationSessionStatus } from '../../utils/testDb';
-import { waitForApiCall, logTestData } from '../../utils/testApiKeys';
-import { createMockGeminiOptions } from '../../utils/mockHelpers';
+import { logTestData, waitForApiCall } from '../../utils/testApiKeys';
+import { getIntegrationSessionStatus, hasGeminiKeys, hasSpotifyKeys, initializeTestDatabase } from '../../utils/testDb';
+
 
 // Mock dependencies for unit tests
 jest.mock('../../../services/gemini/GeminiService');
 jest.mock('../../../services/core/ValidatedQueueService');
 jest.mock('../../../services/spotify/SpotifyRemoteService');
+jest.mock('../../../services/graph/GraphService', () => ({
+    graphService: {
+        getClusterRepresentatives: jest.fn(),
+        getEffectiveNode: jest.fn(),
+        getNeighbors: jest.fn(),
+        getTopGenres: jest.fn(),
+        getSongsByGenres: jest.fn(),
+        commitSession: jest.fn(),
+        ingestLikedSongs: jest.fn(),
+    }
+}));
+
 // Mock the singleton dbService instance
 // Store values in memory so set/get operations work (like real database)
 const mockDbStorage: Record<string, any> = {};
@@ -52,7 +64,12 @@ describe('RecommendationService Unit Tests', () => {
         // Default mock return values
         (dbService.getDailyHistory as jest.Mock).mockResolvedValue([]);
         (dbService.getRecentHistory as jest.Mock).mockResolvedValue([]);
-        (dbService.getDailyHistoryURIs as jest.Mock).mockResolvedValue([]);
+        const { graphService } = require('../../../services/graph/GraphService');
+        (graphService.getClusterRepresentatives as jest.Mock).mockResolvedValue([]);
+        (graphService.getEffectiveNode as jest.Mock).mockResolvedValue(null);
+        (graphService.getNeighbors as jest.Mock).mockResolvedValue([]);
+        (graphService.getTopGenres as jest.Mock).mockResolvedValue([]);
+        (graphService.getSongsByGenres as jest.Mock).mockResolvedValue([]);
     });
 
     describe('getVibeOptions', () => {
@@ -163,6 +180,6 @@ if (hasRequiredKeys) {
     });
 } else {
     describe.skip('RecommendationService Integration Tests', () => {
-        it('skipped - requires API keys in .env.test', () => {});
+        it('skipped - requires API keys in .env.test', () => { });
     });
 }

@@ -1,5 +1,7 @@
 import { GeminiErrors, SpotifyErrors } from '@/services/core/ServiceError';
-import { replaceQueue, appendToQueue, QueuedTrack } from '@/services/spotify/QueueManager';
+import { dbService } from '@/services/database';
+import { graphService } from '@/services/graph/GraphService';
+import { appendToQueue, QueuedTrack, replaceQueue } from '@/services/spotify/QueueManager';
 import { spotifyRemote } from '@/services/spotify/SpotifyRemoteService';
 import { useErrorStore } from '@/stores/ErrorStore';
 import { Alert } from 'react-native';
@@ -48,14 +50,17 @@ interface PlayerState {
     prev: () => Promise<void>;
 
     // State Sync
+    commitCurrentVibe: () => Promise<void>;
+
+    // State Sync
     setInternalState: (state: { isPlaying: boolean, track: Track | null, spotifyQueue?: Track[], progressMs?: number }) => void;
     syncFromSpotify: (fetchQueue?: boolean) => Promise<void>;
     startAutoSync: (intervalMs?: number) => void;
     stopAutoSync: () => void;
 
-    // Session History
-    sessionHistory: { uri: string, title: string, artist: string, status: 'played' | 'skipped', liked: boolean }[];
-    addToHistory: (item: { uri: string, title: string, artist: string, status: 'played' | 'skipped', liked: boolean }) => void;
+    // Session History (listenMs = time listened before skip/finish; graph commit only counts listens >= 1 min)
+    sessionHistory: { uri: string, title: string, artist: string, status: 'played' | 'skipped', liked: boolean; listenMs?: number }[];
+    addToHistory: (item: { uri: string, title: string, artist: string, status: 'played' | 'skipped', liked: boolean; listenMs?: number }) => void;
     lastActionTime: number;
 }
 
@@ -171,9 +176,31 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
         // 2. Start Remote Polling for Track Changes (Skip/Finish)
         // This handles "backend" logic like recording plays
-        spotifyRemote.startPolling((type, track) => {
-            console.log(`[PlayerStore] Track detected as ${type}: ${track.title}`);
-            // TODO: Record play in DB
+        const MIN_LISTEN_MS = 60_000;
+        spotifyRemote.startPolling(async (type, track) => {
+            const listenMs = track.listenMs ?? 0;
+            console.log(`[PlayerStore] Track detected as ${type}: ${track.title} (listened ${Math.round(listenMs / 1000)}s)`);
+
+            // Record to DB only when played more than 1 min
+            if (listenMs >= MIN_LISTEN_MS) {
+                await dbService.recordPlay(
+                    track.uri,
+                    track.title,
+                    track.artist,
+                    type === 'skip',
+                    { mood: get().currentMood }
+                );
+            }
+
+            // Record to Session (graph commit only includes songs listened >= 1 min)
+            get().addToHistory({
+                uri: track.uri,
+                title: track.title,
+                artist: track.artist,
+                status: type === 'finish' ? 'played' : 'skipped',
+                liked: false,
+                listenMs
+            });
         });
     },
 
@@ -235,6 +262,48 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
                     },
                     spotifyQueue: synchronizedQueue
                 });
+
+                // 3. Queue Health Check (AutoDJ)
+                // If queue is low (< 2 songs) and we have a Mood, keep the vibe alive
+                if (get().currentMood && synchronizedQueue.length < 2 && !get().isQueueModifying && !get().isLoading) {
+                    set({ isQueueModifying: true }); // Lock
+                    try {
+                        console.log('[PlayerStore] AutoDJ: Queue low. Looking for suggestions...');
+
+                        // A. Try Graph First (Fastest)
+                        if (state.title) {
+                            const bareTrackId = state.uri?.replace(/^spotify:track:/, '') ?? '';
+                            const currentNode = bareTrackId ? await graphService.getEffectiveNode('SONG', state.title, bareTrackId, { artist: state.artist }) : null;
+                            if (currentNode) {
+                                const nextNode = await graphService.getNextSuggestedNode(currentNode.id);
+
+                                if (nextNode && nextNode.spotify_id) {
+                                    console.log(`[PlayerStore] AutoDJ: Graph suggested '${nextNode.name}'`);
+                                    const spotifyUri = nextNode.spotify_id.startsWith('spotify:') ? nextNode.spotify_id : `spotify:track:${nextNode.spotify_id}`;
+                                    await get().appendQueue([{
+                                        title: nextNode.name,
+                                        artist: nextNode.data.artist || 'Unknown',
+                                        uri: spotifyUri,
+                                        origin: 'api'
+                                    }]);
+                                    set({ isQueueModifying: false });
+                                    return;
+                                }
+                            }
+                        }
+
+                        // B. Fallback to Gemini (Slower but creative)
+                        // We need a seed track method or just expand current vibe
+                        // For now, let's assume we trigger expandVibe
+                        // TODO: Implement expandVibe properly with Seed
+                        // console.log('[PlayerStore] AutoDJ: Graph empty, triggering Gemini...');
+
+                    } catch (e) {
+                        console.error('[PlayerStore] AutoDJ Error', e);
+                    } finally {
+                        set({ isQueueModifying: false });
+                    }
+                }
             } else {
                 // If no state (paused/inactive), we might still want to know if we are "paused"
                 // But usually state is null only if 204 or error.
@@ -244,11 +313,50 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         }
     },
 
-    playVibe: async (tracks: Track[]) => {
+    /** Commit session to graph: only songs listened >= 1 minute count as "visited" for the graph. */
+    commitCurrentVibe: async () => {
+        const { currentMood, sessionHistory } = get();
+        if (!currentMood || sessionHistory.length === 0) return;
+
+        const MIN_LISTEN_MS = 60_000;
+        // Extract bare Spotify ID from URI (spotify:track:abc123 → abc123) so it matches ingested node IDs
+        const bareId = (uri: string) => uri?.replace(/^spotify:track:/, '') ?? '';
+        const songsToCommit = sessionHistory.map(h => ({
+            name: h.title,
+            artist: h.artist,
+            spotifyId: bareId(h.uri),
+            visited: (h.listenMs ?? 0) >= MIN_LISTEN_MS
+        }));
+        const visitedCount = songsToCommit.filter(s => s.visited).length;
+        console.log(`[PlayerStore] Committing vibe '${currentMood}': ${sessionHistory.length} songs, ${visitedCount} listened >= 1 min`);
+
+        await graphService.commitSession(currentMood, songsToCommit);
+
+        // Clear history after commit to start fresh for next vibe
+        // Note: dbService maintains daily history for exclusions, so we don't lose that context
+        set({ sessionHistory: [] });
+    },
+
+    /** @param options.commitPreviousVibe - If true (default), commit current session to graph before playing. Set false for rescue/skip-induced vibe changes so session is cached until user picks a new vibe. */
+    playVibe: async (tracks: Track[], options?: { commitPreviousVibe?: boolean }) => {
         if (!tracks.length) return;
+
+        const commitPreviousVibe = options?.commitPreviousVibe !== false;
+        if (commitPreviousVibe) {
+            await get().commitCurrentVibe();
+        } else {
+            console.log('[PlayerStore] playVibe: skipping graph commit (vibe change not user-chosen; session cached)');
+        }
+
         const { syncFromSpotify, setInternalState } = get();
 
         set({ isLoading: true, isQueueModifying: true, lastActionTime: Date.now() });
+
+        // Log what we're about to play
+        console.log(`[PlayerStore] playVibe called with ${tracks.length} tracks:`);
+        tracks.forEach((t, i) => {
+            console.log(`  ${i + 1}. "${t.title}" - ${t.artist} [${t.uri}]`);
+        });
 
         try {
             const firstTrack = tracks[0];
@@ -280,7 +388,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
             setTimeout(() => syncFromSpotify(true), 1500);
 
         } catch (e: any) {
-            console.error('[PlayerStore] Use Vibe Failed:', e);
+            console.error('[PlayerStore] playVibe Failed:', e);
             useErrorStore.getState().setError(SpotifyErrors.unknown('Failed to start vibe.'));
         } finally {
             setTimeout(() => set({ isLoading: false, isQueueModifying: false }), 2000);
@@ -294,7 +402,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
             const optimisiticTrack = { ...track, origin: 'optimistic' as const };
             set({ queue: [optimisiticTrack], currentIndex: 0, currentTrack: optimisiticTrack, isPlaying: true });
 
-            await spotifyRemote.play([track.uri]);
+            // Use Lazy Validation / Self-Healing
+            // We need to pass metadata for recovery search
+            await spotifyRemote.playOrRecover(track.uri, {
+                name: track.title,
+                artist: track.artist,
+                // We don't have nodeId here easily, but that's fine, it will update by name if needed
+            });
         } catch (e: any) {
             handlePlaybackError(e, 'Play');
         } finally {

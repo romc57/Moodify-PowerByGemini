@@ -11,16 +11,19 @@ export const GeminiPrompts = {
     strategy: 'conservative' | 'exploratory' | 'refined' = 'conservative',
     triggerCount: number = 0
   ) => {
-    const historyCompact = recentHistory.slice(0, 8).map((h: any) =>
+    const safeHistory = recentHistory || [];
+    const safeFavorites = favorites || [];
+
+    const historyCompact = safeHistory.slice(0, 8).map((h: any) =>
       `${h.track_name}|${h.artist_name}|${h.skipped ? 'S' : 'P'}`
     ).join(';');
 
     const strategyHint = strategy === 'conservative' ? 'similar'
       : strategy === 'exploratory' ? 'new-genre-same-energy' : 'analyze-skips';
 
-    return `JSON. 1 seed track for Spotify Radio.
+    return `You are an expert music DJ. JSON. 1 seed track for Spotify Radio.
 H(already played):${historyCompact}
-Skip/5m:${skipRate}|Fav:${favorites.slice(0, 5).join(',')}
+Skip/5m:${skipRate}|Fav:${safeFavorites.slice(0, 5).join(',')}
 Mode:${strategyHint}|${userInstruction || 'auto'}
 Rules:NEVER suggest songs from H list,popular,no mega-hits
 {"reasoning":"1 line","items":[{"type":"track","title":"X","artist":"Y","reason":"Z","query":"X Y"}]}`;
@@ -29,72 +32,106 @@ Rules:NEVER suggest songs from H list,popular,no mega-hits
   /**
    * Vibe Options - 16 distinct mood-based playlists with seed tracks
    * Request 16 to get 8+ after Spotify validation failures
-   * Output: { options: [{ id, title, description, track: { title, artist }, reason }] }
+   * Output: { options: [{ id, title, description, track: { t, a }, reason }] }
    */
   generateVibeOptionsPrompt: (
-    recentHistory: any[],
+    recentHistory: { track_name: string; artist_name: string }[],
+    clusterReps: { name: string; artist: string }[],
     favorites: string[],
     userInstruction: string,
     excludeTracks: string[] = []
   ) => {
-    const historyCompact = recentHistory.length > 0
-      ? recentHistory.slice(0, 8).map((h: any) => `${h.track_name}|${h.artist_name}`).join(';')
+    const safeHistory = recentHistory || [];
+    const safeClusters = clusterReps || [];
+    const safeFavorites = favorites || [];
+    const safeExclude = excludeTracks || [];
+
+    const historyCompact = safeHistory.length > 0
+      ? safeHistory.map(h => `${h.track_name}|${h.artist_name}`).join(';')
       : 'None';
 
-    const favCompact = favorites.length > 0 ? favorites.slice(0, 5).join(';') : 'Any';
-    const excludeCompact = excludeTracks.length > 0 ? excludeTracks.slice(0, 30).join(';') : 'None';
+    const clustersCompact = safeClusters.length > 0
+      ? safeClusters.map(c => `${c.name}|${c.artist}`).join(';')
+      : 'None';
 
-    return `JSON. 16 vibe options with POPULAR Spotify tracks.
-H:${historyCompact}
+    const favCompact = safeFavorites.length > 0 ? safeFavorites.slice(0, 8).join(';') : 'Any';
+    const excludeCompact = safeExclude.length > 0 ? safeExclude.slice(0, 50).join(';') : 'None';
+
+    const prompt = `You are a music curator. JSON. 16 vibe options.
+Ctx(History):${historyCompact}
+Ctx(Taste Clusters):${clustersCompact}
 Fav:${favCompact}
 ${userInstruction ? `Hint:${userInstruction}` : ''}
-EXCLUDE(already played today):${excludeCompact}
-Rules:diverse genres/eras,major artists,2-4 word vibe names,NEVER suggest songs from EXCLUDE list
-{"options":[{"id":"v1","title":"Vibe Name","description":"mood","track":{"title":"Song","artist":"Artist"},"reason":"why"}]}`;
+EXCLUDE:${excludeCompact}
+Rules:
+1. 4 'Familiar' from Taste Clusters.
+2. 4 'Adjacent' (similar genre).
+3. 8 'Discovery' (new).
+4. Diverse genres.
+5. NEVER suggest songs from EXCLUDE.
+Output:{"options":[{"id":"v1","title":"Name","description":"Mood","track":{"t":"Title","a":"Artist"},"reason":"Why (Context)"}]}`;
+
+    return prompt;
   },
 
   /**
-   * Vibe Expansion - 15 tracks matching a seed track's vibe
-   * Request 15 to get 10+ after validation
-   * Output: { mood, items: [{ title, artist }] }
+   * Vibe Expansion - 5 "Discovery" tracks matching seed
+   * Hybrid Strategy: We mix these with Graph Neighbors later.
+   * Output: { mood, items: [{ t, a }] }
    */
   generateVibeExpansionPrompt: (
     seedTrack: { title: string; artist: string },
     recentHistory: any[],
+    neighbors: { name: string; artist: string }[],
     favorites: string[],
     excludeTracks: string[] = []
   ) => {
-    const excludeCompact = excludeTracks.slice(0, 30).join(';');
+    const safeExclude = excludeTracks || [];
+    const safeNeighbors = neighbors || [];
+    const safeHistory = recentHistory || [];
+    const safeFavorites = favorites || [];
 
-    return `JSON. 15 tracks like: ${seedTrack.title}|${seedTrack.artist}
-EXCLUDE(already played today):${excludeCompact}
-Rules:match energy/mood,POPULAR on Spotify,major artists,no seed track,NEVER suggest songs from EXCLUDE list
-{"mood":"vibe","items":[{"title":"X","artist":"Y"}]}`;
+    const excludeCompact = safeExclude.slice(0, 50).join(';');
+    const neighborsCompact = safeNeighbors.slice(0, 10).map(n => `${n.name}|${n.artist}`).join(';');
+    // Minimal history context
+    const historyCompact = safeHistory.slice(0, 5).map(h => `${h.track_name}|${h.artist_name}`).join(';');
+
+    return `Curator. JSON. 5 DISTINCT tracks like: ${seedTrack.title}|${seedTrack.artist}
+Ctx(Neighbors-Avoid):${neighborsCompact}
+Ctx(History):${historyCompact}
+Fav:${safeFavorites.slice(0, 5).join(';')}
+EXCLUDE:${excludeCompact}
+Rules:
+1. Suggest 5 'Discovery' songs (NOT in Neighbors).
+2. Allow 'Fav' if not played recently.
+3. Match energy/mood.
+4. Minimal JSON keys (t=title, a=artist).
+Output:{"mood":"vibe","items":[{"t":"Title","a":"Artist"}]}`;
   },
 
   /**
-   * Rescue Vibe - Emergency direction change after 3+ skips
-   * Request 15 tracks to get 10+ after validation
-   * Output: { vibe, why, items: [{ title, artist }] }
+   * Rescue Vibe - Emergency change
+   * Output: { vibe, why, items: [{ t, a }] }
    */
   generateRescueVibePrompt: (
     recentSkips: any[],
     favorites: string[],
     excludeTracks: string[] = []
   ) => {
-    const skipsCompact = recentSkips.slice(0, 5).map((s: any) =>
-      `${s.track_name}|${s.artist_name}`
-    ).join(';');
+    const safeSkips = recentSkips || [];
+    const safeFavorites = favorites || [];
+    const safeExclude = excludeTracks || [];
 
-    const favCompact = favorites.slice(0, 5).join(';');
-    const excludeCompact = excludeTracks.slice(0, 30).join(';');
+    const skipsCompact = safeSkips.slice(0, 5).map((s: any) => `${s.track_name}|${s.artist_name}`).join(';');
+    const favCompact = safeFavorites.slice(0, 5).join(';');
+    const excludeCompact = safeExclude.slice(0, 50).join(';');
 
-    return `JSON. User skipping - change direction. 15 POPULAR Spotify tracks.
+    return `Adaptive DJ. JSON. User skipping - change direction. 10 tracks.
 Skipped:${skipsCompact}
 Fav:${favCompact}
-EXCLUDE(already played today):${excludeCompact}
-Rules:avoid similar to skipped,new genre/energy,major artists,NEVER suggest songs from EXCLUDE list
-{"vibe":"2-4 words","why":"strategy","items":[{"title":"X","artist":"Y"}]}`;
+EXCLUDE:${excludeCompact}
+Rules:avoid similar to skipped,new genre,minimal JSON.
+Output:{"vibe":"Name","why":"Reason","items":[{"t":"Title","a":"Artist"}]}`;
   },
 
   /**
@@ -106,12 +143,14 @@ Rules:avoid similar to skipped,new genre/energy,major artists,NEVER suggest song
     recentHistory: any[],
     userContext?: string
   ) => {
+    const safeHistory = recentHistory || [];
+
     const nowPlaying = currentTrack ? `${currentTrack.title}|${currentTrack.artist}` : 'none';
-    const historyCompact = recentHistory.slice(0, 8).map((h: any) =>
+    const historyCompact = safeHistory.slice(0, 8).map((h: any) =>
       `${h.track_name}|${h.artist_name}`
     ).join(';');
 
-    return `JSON. Assess listening mood.
+    return `You are a music analyst. JSON. Assess listening mood.
 Now:${nowPlaying}
 H:${historyCompact}
 ${userContext ? `Ctx:${userContext}` : ''}

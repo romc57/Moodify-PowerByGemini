@@ -34,7 +34,11 @@ const SPOTIFY_SCOPES = [
  */
 export function getRedirectUri(): string {
     if (Platform.OS === 'web') {
-        return 'http://127.0.0.1:8081/callback';
+        // Dynamically use current origin so it works on any host/port
+        if (typeof window !== 'undefined') {
+            return `${window.location.origin}/callback`;
+        }
+        return 'http://localhost:8081/callback';
     }
     // Native: use custom scheme for Android/iOS
     return makeRedirectUri({
@@ -213,14 +217,19 @@ export function useSpotifyAuth(): UseSpotifyAuthReturn {
             console.log('[SpotifyAuth] Starting auth flow...');
             console.log('[SpotifyAuth] Redirect URI:', getRedirectUri());
 
-            // Use WebBrowser.openAuthSessionAsync for proper handling across platforms
-            // On Android: Uses Chrome Custom Tabs (keeps app in memory)
-            // On iOS: Uses ASWebAuthenticationSession
-            // On Web: Opens popup window
-            const result = await WebBrowser.openAuthSessionAsync(
-                request.url,
-                getRedirectUri()
-            );
+            let result;
+
+            if (Platform.OS === 'web') {
+                // On web, use promptAsync for proper popup-based OAuth flow
+                // This integrates with maybeCompleteAuthSession() in the callback route
+                result = await promptAsync();
+            } else {
+                // On native, use WebBrowser for Chrome Custom Tabs / ASWebAuthenticationSession
+                result = await WebBrowser.openAuthSessionAsync(
+                    request.url,
+                    getRedirectUri()
+                );
+            }
 
             console.log('[SpotifyAuth] Auth result type:', result.type);
 
@@ -239,7 +248,7 @@ export function useSpotifyAuth(): UseSpotifyAuthReturn {
             setState((s) => ({ ...s, isLoading: false, error }));
             return { success: false, error };
         }
-    }, [request, clientId]);
+    }, [request, clientId, promptAsync]);
 
     return { state, login, clientId };
 }

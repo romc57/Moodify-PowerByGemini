@@ -14,7 +14,7 @@
 
 import { recommendationService } from '../../services/core/RecommendationService';
 import { spotifyRemote } from '../../services/spotify/SpotifyRemoteService';
-import { hasGeminiKeys, hasSpotifyKeys, initializeTestDatabase, getIntegrationSessionStatus } from '../utils/testDb';
+import { hasGeminiKeys, hasSpotifyKeys, initializeTestDatabase, getIntegrationSessionStatus, ensureFreshSpotifyToken } from '../utils/testDb';
 import { waitForApiCall, logTestData } from '../utils/testApiKeys';
 import { getPlaybackTracker, resetPlaybackTracker, PlaybackTestResult } from '../utils/PlaybackTracker';
 
@@ -83,6 +83,10 @@ describe('Full Flow Integration Tests (Real API)', () => {
         }
 
         await initializeTestDatabase();
+
+        // Ensure we have a fresh token before starting tests
+        await ensureFreshSpotifyToken();
+
         const status = await getIntegrationSessionStatus();
 
         if (!status.runGeminiAndSpotify) {
@@ -92,9 +96,11 @@ describe('Full Flow Integration Tests (Real API)', () => {
         console.log('[FullFlow] Test environment ready');
     }, 30000);
 
-    beforeEach(() => {
+    beforeEach(async () => {
         testResults.length = 0;
         tracker.reset();
+        // Ensure token is fresh before each test
+        await ensureFreshSpotifyToken();
     });
 
     afterEach(() => {
@@ -110,12 +116,18 @@ describe('Full Flow Integration Tests (Real API)', () => {
         it('should play recommended tracks in correct order', async () => {
             console.log('\n[Test] Starting complete vibe flow test...\n');
 
-            // Step 1: Get vibe options
+            // Step 1: Get vibe options (with retry for Gemini flakiness)
             console.log('[Step 1] Getting vibe options from Gemini...');
-            const vibeOptions = await waitForApiCall(
-                () => recommendationService.getVibeOptions('energetic workout music'),
-                60000
-            );
+            let vibeOptions: any[] = [];
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                vibeOptions = await waitForApiCall(
+                    () => recommendationService.getVibeOptions('energetic workout music'),
+                    60000
+                );
+                if (vibeOptions && vibeOptions.length > 0 && vibeOptions[0]?.track) break;
+                console.log(`[Step 1] Gemini returned empty, retrying (${attempt}/3)...`);
+                await sleep(2000);
+            }
 
             recordResult('Step 1: Get vibe options', { query: 'energetic workout music' }, { isArray: true, minLength: true }, {
                 isArray: Array.isArray(vibeOptions),
@@ -267,12 +279,18 @@ describe('Full Flow Integration Tests (Real API)', () => {
         it('should trigger rescue vibe after 3 skips', async () => {
             console.log('\n[Test] Starting rescue vibe test...\n');
 
-            // Step 1: Start with initial vibe
+            // Step 1: Start with initial vibe (with retry for Gemini flakiness)
             console.log('[Step 1] Getting initial vibe...');
-            const initialOptions = await waitForApiCall(
-                () => recommendationService.getVibeOptions('chill relaxing music'),
-                60000
-            );
+            let initialOptions: any[] = [];
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                initialOptions = await waitForApiCall(
+                    () => recommendationService.getVibeOptions('chill relaxing music'),
+                    60000
+                );
+                if (initialOptions && initialOptions.length > 0 && initialOptions[0]?.track) break;
+                console.log(`[Step 1] Gemini returned empty, retrying (${attempt}/3)...`);
+                await sleep(2000);
+            }
 
             expect(initialOptions.length).toBeGreaterThan(0);
 
@@ -385,11 +403,18 @@ describe('Full Flow Integration Tests (Real API)', () => {
 
             // Step 1: Play first vibe
             console.log('[Step 1] Playing first vibe...');
-            const vibe1 = await waitForApiCall(
-                () => recommendationService.getVibeOptions('rock music'),
-                60000
-            );
+            let vibe1: any[] = [];
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                vibe1 = await waitForApiCall(
+                    () => recommendationService.getVibeOptions('rock music'),
+                    60000
+                );
+                if (vibe1 && vibe1.length > 0 && vibe1[0]?.track) break;
+                console.log(`[Step 1] Gemini returned empty, retrying (${attempt}/3)...`);
+                await sleep(2000);
+            }
 
+            expect(vibe1.length).toBeGreaterThan(0);
             const firstTrack = vibe1[0].track;
             const { items: items1 } = await waitForApiCall(
                 () => recommendationService.expandVibe(
@@ -481,6 +506,6 @@ describe('Full Flow Integration Tests (Real API)', () => {
             expect(newTracksInQueue).toBeGreaterThan(0);
             expect(queue2Uris.length).toBeGreaterThanOrEqual(expectedQueueLength);
 
-        }, 180000);
+        }, 300000);
     });
 });

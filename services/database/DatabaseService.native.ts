@@ -42,6 +42,10 @@ class DatabaseService {
         this.initPromise = this.init();
     }
 
+    public get database(): SQLite.SQLiteDatabase | null {
+        return this.db;
+    }
+
     /**
      * Ensure database is initialized before operations
      */
@@ -111,6 +115,35 @@ class DatabaseService {
         model_reasoning TEXT,
         suggested_action TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS graph_nodes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL, -- 'SONG', 'ARTIST', 'VIBE', 'AUDIO_FEATURE', 'GENRE'
+        spotify_id TEXT,
+        name TEXT,
+        data TEXT, -- JSON
+        play_count INTEGER DEFAULT 0,
+        last_played_at INTEGER,
+        created_at INTEGER,
+        last_accessed INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS graph_edges (
+        source_id INTEGER,
+        target_id INTEGER,
+        type TEXT, -- 'SIMILAR', 'NEXT', 'RELATED', 'HAS_FEATURE', 'HAS_GENRE'
+        weight REAL DEFAULT 1.0,
+        created_at INTEGER,
+        FOREIGN KEY(source_id) REFERENCES graph_nodes(id),
+        FOREIGN KEY(target_id) REFERENCES graph_nodes(id),
+        UNIQUE(source_id, target_id, type)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_graph_spotify_id ON graph_nodes(spotify_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_nodes_spotify_id_unique ON graph_nodes(spotify_id) WHERE spotify_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);
+      CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);
+      CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(type);
     `);
         console.log('[Database] Initialized with New Schema');
 

@@ -1,4 +1,5 @@
 import { dbService } from '@/services/database';
+import { graphService } from '@/services/graph/GraphService';
 import { usePlayerStore } from '@/stores/PlayerStore';
 import { gemini } from '../gemini/GeminiService';
 import { spotifyRemote } from '../spotify/SpotifyRemoteService';
@@ -53,11 +54,25 @@ export class RecommendationService {
             const allExclusions = await this.getExclusions();
             const favorites = await this.getFavorites(10, 'short_term');
 
+            // Fetch Graph Cluster Representatives for context
+            let clusterReps: { name: string; artist: string }[] = [];
+            try {
+                const reps = await graphService.getClusterRepresentatives(4);
+                clusterReps = reps.map(r => {
+                    // r.data is already parsed by GraphService, so handle both cases
+                    const data = typeof r.data === 'string' ? JSON.parse(r.data || '{}') : (r.data || {});
+                    return { name: r.name, artist: data.artist || 'Unknown' };
+                });
+            } catch (e) {
+                console.warn('[RecService] Failed to fetch cluster reps', e);
+            }
+
             console.log(`[RecService] Generating Vibe Options (Excluding ${allExclusions.length} tracks)...`);
 
             // Request 8 options (optimized for speed - target is 8)
             const options = await gemini.getVibeOptions(
                 history,
+                clusterReps,
                 favorites,
                 userInstruction,
                 allExclusions
@@ -85,8 +100,6 @@ export class RecommendationService {
         }
     }
 
-
-
     /**
      * Entry Point 2: Rescue Vibe (3 Skips)
      * - Immediate "New Vibe" generation (No options)
@@ -107,13 +120,13 @@ export class RecommendationService {
             );
 
             if (!result || result.items.length === 0) {
-                // True Fallback if Gemini fails during Rescue
-                console.warn('[RecService] Rescue Fallback to Top Tracks');
-                const fallback = await this.getFallbackTracks(10);
+                // Smart Fallback using graph genres when Gemini fails
+                console.warn('[RecService] Rescue Fallback to Graph Genre Mix');
+                const fallback = await this.getGraphFallbackTracks(10);
                 return {
                     items: fallback,
-                    vibe: "Comfort Zone (Fallback)",
-                    reasoning: "We couldn't reach the AI, so here are some familiar favorites to reset the vibe."
+                    vibe: "Genre Mix (Smart Fallback)",
+                    reasoning: "We couldn't reach the AI, so here's a mix based on your favorite genres."
                 };
             }
 
@@ -138,14 +151,14 @@ export class RecommendationService {
                 sessionUris // Exclude session history
             );
 
-            // If validation returned nothing, use fallback
+            // If validation returned nothing, use graph fallback
             if (validatedItems.length === 0) {
-                console.warn('[RecService] All tracks failed validation, using fallback');
-                const fallback = await this.getFallbackTracks(10);
+                console.warn('[RecService] All tracks failed validation, using graph fallback');
+                const fallback = await this.getGraphFallbackTracks(10);
                 return {
                     items: fallback,
-                    vibe: "Comfort Zone (Fallback)",
-                    reasoning: "Couldn't find suggested tracks on Spotify, here are some favorites instead."
+                    vibe: "Genre Mix (Smart Fallback)",
+                    reasoning: "Couldn't find suggested tracks on Spotify, here's a mix based on your favorite genres."
                 };
             }
 
@@ -163,8 +176,7 @@ export class RecommendationService {
 
     /**
      * Entry Point 3: Expansion (Loop Logic or Post-Selection)
-     * - Extends a vibe by 10 tracks
-     * - Now uses ValidatedQueueService for smart backfill
+     * - Extends a vibe by 10 tracks (Hybrid: Gemini + Graph)
      */
     async expandVibe(
         seedTrack: { title: string; artist: string },
@@ -176,27 +188,60 @@ export class RecommendationService {
             const favorites = await this.getFavorites(5, 'short_term');
 
             console.log(`[RecService] Expanding vibe from seed: ${seedTrack.title}...`);
+
+            // 1. Fetch Graph Neighbors
+            let neighbors: { name: string; artist: string; weight: number }[] = [];
+            try {
+                const seedNode = await graphService.getEffectiveNode('SONG', seedTrack.title, null, { artist: seedTrack.artist });
+                if (seedNode && seedNode.id) {
+                    // Get more candidates than needed (e.g., 20) to filter
+                    // getNeighbors returns processed objects {name, artist, weight} already
+                    neighbors = await graphService.getNeighbors(seedNode.id, 20);
+                }
+            } catch (e) {
+                console.warn('[RecService] Failed to fetch neighbors', e);
+            }
+
+            // 2. Call Gemini for "Discovery" (with neighbors context)
             const result = await gemini.expandVibe(
                 seedTrack,
                 history,
+                neighbors,
                 favorites,
                 allExclusions
             );
 
-            if (!result || result.items.length === 0) return { items: [] };
+            // 3. Hybrid Combination
+            const suggestions: RawTrackSuggestion[] = [];
 
-            // Convert Gemini response to RawTrackSuggestion format
-            const suggestions: RawTrackSuggestion[] = result.items.map((item: any) => ({
-                title: item.title || item.t,
-                artist: item.artist || item.a,
-                reason: item.reason
-            }));
+            // A. Add Gemini suggestions (Discovery)
+            if (result && result.items) {
+                suggestions.push(...result.items.map((item: any) => ({
+                    title: item.title || item.t,
+                    artist: item.artist || item.a,
+                    reason: item.reason || 'Gemini Discovery'
+                })));
+            }
+
+            // B. Add Graph Neighbors (Continuity/Familiarity)
+            // Filter neighbors: Not in exclusion list
+            const combinedExclusions = new Set(allExclusions);
+            const graphCandidates = neighbors.filter(n =>
+                !combinedExclusions.has(`${n.name} - ${n.artist}`)
+            ).slice(0, 5); // Take top 5 valid neighbors
+
+            suggestions.push(...graphCandidates.map(n => ({
+                title: n.name,
+                artist: n.artist,
+                reason: `Graph Connection (Weight: ${n.weight.toFixed(1)})`
+            })));
 
             // Get session history URIs to exclude already-played tracks
             const sessionUris = usePlayerStore.getState().sessionHistory.map(h => h.uri);
             const currentQueue = usePlayerStore.getState().queue.map(t => t.uri);
 
             // Use ValidatedQueueService for smart validation with backfill
+            // It will prioritize suggestions order. Gemini first (Discovery), then Graph (Familiarity).
             const validatedItems = await validatedQueueService.validateAndFill(
                 suggestions,
                 10, // Target 10 tracks
@@ -205,13 +250,23 @@ export class RecommendationService {
                     seedTrack,
                     vibeName: currentVibeContext
                 },
-                [...sessionUris, ...currentQueue] // Exclude session history + current queue
+                [...sessionUris, ...currentQueue]
             );
 
             return { items: validatedItems, mood: result.mood };
 
         } catch (error) {
             console.error('[RecService] Expansion Failed:', error);
+            // Use graph fallback instead of returning empty
+            try {
+                const fallback = await this.getGraphFallbackTracks(10);
+                if (fallback.length > 0) {
+                    console.log(`[RecService] Expansion recovered with ${fallback.length} graph fallback tracks`);
+                    return { items: fallback, mood: 'Genre Mix (Smart Fallback)' };
+                }
+            } catch (fallbackError) {
+                console.error('[RecService] Expansion graph fallback also failed:', fallbackError);
+            }
             return { items: [] };
         }
     }
@@ -229,9 +284,105 @@ export class RecommendationService {
     }
 
     /**
-     * Fallback generator (Spotify Top Tracks)
+     * Graph-aware fallback: uses local genre data + Spotify recommendations
+     * when Gemini is unavailable (429, parse errors, network issues).
+     *
+     * Cascade: Graph genres → Graph songs (60%) + Spotify recs (40%) → Top tracks → []
      */
-    private async getFallbackTracks(count: number): Promise<any[]> {
+    private async getGraphFallbackTracks(count: number): Promise<any[]> {
+        try {
+            // 1. Build exclusion set
+            const allExclusions = await this.getExclusions();
+            const sessionUris = new Set(
+                usePlayerStore.getState().sessionHistory.map(h => h.uri)
+            );
+            const excludeUris = new Set([...sessionUris]);
+
+            // 2. Get top genres from graph
+            const topGenres = await graphService.getTopGenres(10);
+
+            if (topGenres.length === 0) {
+                console.log('[RecService] Graph empty, falling back to top tracks');
+                return this.getTopTracksFallback(count);
+            }
+
+            const genreNames = topGenres.slice(0, 5).map(g => g.name);
+            console.log(`[RecService] Graph fallback using genres: ${genreNames.join(', ')}`);
+
+            const items: any[] = [];
+
+            // 3. Graph songs (~60% of target)
+            const graphTarget = Math.ceil(count * 0.6);
+            const graphSongs = await graphService.getSongsByGenres(genreNames, graphTarget * 2, excludeUris);
+
+            // Filter against string exclusions (daily history uses "title - artist" format)
+            const exclusionSet = new Set(allExclusions);
+            const filteredGraphSongs = graphSongs.filter(s => {
+                const data = typeof s.data === 'string' ? JSON.parse(s.data || '{}') : (s.data || {});
+                return !exclusionSet.has(`${s.name} - ${data.artist || 'Unknown'}`);
+            });
+
+            const selectedGraphSongs = this.shuffleArray(filteredGraphSongs).slice(0, graphTarget);
+            for (const song of selectedGraphSongs) {
+                const data = typeof song.data === 'string' ? JSON.parse(song.data || '{}') : (song.data || {});
+                items.push({
+                    title: song.name,
+                    artist: data.artist || 'Unknown',
+                    uri: song.spotify_id?.startsWith('spotify:') ? song.spotify_id : `spotify:track:${song.spotify_id}`,
+                    reason: 'Graph Genre Match',
+                    type: 'track'
+                });
+            }
+
+            // 4. Spotify recommendations seeded by graph genres + some seed tracks (~40%)
+            const discoveryTarget = count - items.length;
+            if (discoveryTarget > 0) {
+                try {
+                    const seedTrackIds = selectedGraphSongs
+                        .slice(0, 2)
+                        .map(s => s.spotify_id?.replace('spotify:track:', '') || '')
+                        .filter(Boolean);
+                    // Spotify allows max 5 seeds total (tracks + genres)
+                    const seedGenres = genreNames.slice(0, 5 - seedTrackIds.length);
+
+                    const recsRaw = await spotifyRemote.getRecommendations(seedTrackIds, seedGenres, discoveryTarget * 2);
+                    const recs = (recsRaw || [])
+                        .filter((t: any) => t.uri && !excludeUris.has(t.uri) && !exclusionSet.has(`${t.name} - ${t.artists?.[0]?.name || 'Unknown'}`))
+                        .slice(0, discoveryTarget);
+
+                    for (const t of recs) {
+                        items.push({
+                            title: t.name,
+                            artist: t.artists?.[0]?.name || 'Unknown',
+                            uri: t.uri,
+                            artwork: t.album?.images?.[0]?.url,
+                            reason: 'Genre Discovery',
+                            type: 'track'
+                        });
+                    }
+                } catch (e) {
+                    console.warn('[RecService] Spotify recommendations failed in fallback:', e);
+                }
+            }
+
+            // 5. Fill remaining with top tracks if still short
+            if (items.length < count) {
+                const fill = await this.getTopTracksFallback(count - items.length);
+                items.push(...fill);
+            }
+
+            console.log(`[RecService] Graph fallback produced ${items.length} tracks (${selectedGraphSongs.length} graph, ${items.length - selectedGraphSongs.length} discovery/fill)`);
+            return items;
+        } catch (e) {
+            console.error('[RecService] Graph fallback failed, using top tracks:', e);
+            return this.getTopTracksFallback(count);
+        }
+    }
+
+    /**
+     * Simple top tracks fallback (original behavior, used as safety net)
+     */
+    private async getTopTracksFallback(count: number): Promise<any[]> {
         try {
             const tracks = await spotifyRemote.getUserTopTracks(count * 2, 'medium_term');
             if (!tracks || tracks.length === 0) return [];
@@ -246,7 +397,7 @@ export class RecommendationService {
                 type: 'track'
             }));
         } catch (e) {
-            console.error('Fallback fetch failed', e);
+            console.error('Top tracks fallback fetch failed', e);
             return [];
         }
     }

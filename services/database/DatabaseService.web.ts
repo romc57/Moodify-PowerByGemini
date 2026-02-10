@@ -65,6 +65,11 @@ class DatabaseServiceWeb {
         this.checkAndClearDailyLog();
     }
 
+    // Interface compatibility for Native/Web unified usage
+    public get database(): any {
+        return null;
+    }
+
     private checkAndClearDailyLog() {
         try {
             const prefs = getStorage<Record<string, string>>(STORAGE_KEYS.USER_PREFERENCES, {});

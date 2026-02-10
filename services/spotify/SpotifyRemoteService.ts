@@ -1,4 +1,5 @@
 import { SpotifyErrors } from '@/services/core/ServiceError';
+import { graphService } from '@/services/graph/GraphService';
 import { useErrorStore } from '@/stores/ErrorStore';
 import axios from 'axios';
 import { dbService } from '../database';
@@ -23,6 +24,10 @@ export class SpotifyRemoteService {
     private lastAuthFailTime: number = 0;
     private lastAuthFailReason: AuthFailReason = null;
     private readonly AUTH_RETRY_DELAY_MS = 30000; // Wait 30s before retrying after auth failure
+
+    // Mutex for token refresh - prevents concurrent refresh attempts
+    private isRefreshing: boolean = false;
+    private refreshPromise: Promise<string | null> | null = null;
 
     private constructor() { }
 
@@ -138,6 +143,26 @@ export class SpotifyRemoteService {
             return null;
         }
 
+        // If already refreshing, wait for that promise instead of starting another
+        if (this.isRefreshing && this.refreshPromise) {
+            console.log('[SpotifyRemote] Refresh already in progress, waiting...');
+            return this.refreshPromise;
+        }
+
+        // Start the refresh with mutex
+        this.isRefreshing = true;
+        this.refreshPromise = this.doRefreshAccessToken();
+
+        try {
+            const result = await this.refreshPromise;
+            return result;
+        } finally {
+            this.isRefreshing = false;
+            this.refreshPromise = null;
+        }
+    }
+
+    private async doRefreshAccessToken(): Promise<string | null> {
         const refreshToken = await dbService.getRefreshToken('spotify');
         if (!refreshToken) {
             console.warn('[SpotifyRemote] No refresh token available');
@@ -216,29 +241,101 @@ export class SpotifyRemoteService {
      * Execute single request with retry logic
      */
     private async executeRequest(config: any, method: string, endpoint: string, retries = 3): Promise<any> {
-        const startTime = Date.now();
-        const logData = config.data && Object.keys(config.data).length > 0
-            ? JSON.stringify(config.data).substring(0, 100)
-            : '';
-        console.log(`[SpotifyRemote] ${method.toUpperCase()} ${endpoint}`, logData);
-
         try {
             const response = await axios(config);
-            console.log(`[SpotifyRemote] Response (${response.status}): ${Date.now() - startTime}ms`);
             return response;
         } catch (error: any) {
-            console.error(`[SpotifyRemote] Failed (${error.response?.status || 'Unknown'}): ${error.message}`);
-
             const shouldRetry = (error.message === 'Network Error' ||
                 (error.response?.status >= 500)) && retries > 0;
 
             if (shouldRetry) {
-                console.warn(`[SpotifyRemote] Retrying... (${retries} left)`);
                 await new Promise(r => setTimeout(r, 1000));
                 return this.executeRequest(config, method, endpoint, retries - 1);
             }
             throw error;
         }
+    }
+
+    /**
+     * Main request handler with auth retry
+     */
+    /**
+     * Get user's saved tracks (Liked Songs)
+     */
+    async getUserSavedTracks(limit: number = 50, offset: number = 0): Promise<{ items: any[], total: number }> {
+        try {
+            const start = performance.now();
+            const response = await this.request('get', '/me/tracks', {}, { limit, offset });
+            const duration = performance.now() - start;
+            console.log(`[Perf] Spotify Request (getUserSavedTracks): ${duration.toFixed(2)}ms`);
+
+            return {
+                items: response?.data?.items || [],
+                total: response?.data?.total || 0
+            };
+        } catch (e) {
+            console.error('[SpotifyRemote] Get Saved Tracks Error', e);
+            return { items: [], total: 0 };
+        }
+    }
+
+    /**
+     * Get audio features for multiple tracks (max 100 per request)
+     */
+    async getAudioFeaturesBatch(ids: string[]): Promise<any[]> {
+        const results: any[] = [];
+        const CHUNK_SIZE = 100;
+
+        for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+            const chunk = ids.slice(i, i + CHUNK_SIZE);
+            try {
+                const response = await this.request('get', '/audio-features', {}, {
+                    ids: chunk.join(',')
+                });
+                if (response?.data?.audio_features) {
+                    results.push(...response.data.audio_features);
+                }
+            } catch (e) {
+                console.error(`[SpotifyRemote] Audio Features Batch Error (offset ${i})`, e);
+                // Push nulls for failed chunks so indices stay aligned
+                results.push(...chunk.map(() => null));
+            }
+            // Rate limit between chunks
+            if (i + CHUNK_SIZE < ids.length) {
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }
+
+        return results;
+    }
+
+    /**
+     * Get artist details for multiple artists (max 50 per request)
+     */
+    async getArtistsBatch(ids: string[]): Promise<any[]> {
+        const results: any[] = [];
+        const CHUNK_SIZE = 50;
+
+        for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+            const chunk = ids.slice(i, i + CHUNK_SIZE);
+            try {
+                const response = await this.request('get', '/artists', {}, {
+                    ids: chunk.join(',')
+                });
+                if (response?.data?.artists) {
+                    results.push(...response.data.artists);
+                }
+            } catch (e) {
+                console.error(`[SpotifyRemote] Artists Batch Error (offset ${i})`, e);
+                results.push(...chunk.map(() => null));
+            }
+            // Rate limit between chunks
+            if (i + CHUNK_SIZE < ids.length) {
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }
+
+        return results;
     }
 
     /**
@@ -254,7 +351,17 @@ export class SpotifyRemoteService {
 
         const makeRequest = async (t: string) => {
             const config = this.buildRequestConfig(method, endpoint, t, data, params);
-            return this.executeRequest(config, method, endpoint, 3);
+
+            const start = performance.now();
+            const result = await this.executeRequest(config, method, endpoint, 3);
+            const duration = performance.now() - start;
+
+            // Log performance for critical endpoints (search, player, etc.)
+            // if (endpoint.includes('/search') || endpoint.includes('/player')) {
+            //     console.log(`[Perf] Spotify Request (${endpoint}): ${duration.toFixed(2)}ms`);
+            // }
+
+            return result;
         };
 
         try {
@@ -276,16 +383,13 @@ export class SpotifyRemoteService {
 
     async play(uriOrUris?: string | string[]) {
         try {
-            console.log('[SpotifyRemote] Play Request:', uriOrUris);
             let body = {};
             if (uriOrUris) {
                 const uris = Array.isArray(uriOrUris) ? uriOrUris : [uriOrUris];
                 body = { uris };
-                console.log('[SpotifyRemote] Playing Request with URIs:', uris);
-            } else {
-                console.log('[SpotifyRemote] Playing Request (Resume)');
+                console.log(`[SpotifyRemote] Playing ${uris.length} tracks`);
             }
-            // Add offset to ensure we play from start (critical for single tracks)
+            // Add offset to ensure we play from start
             if (uriOrUris) {
                 (body as any).offset = { position: 0 };
             }
@@ -510,7 +614,8 @@ export class SpotifyRemoteService {
 
         const isFinished = this.wasTrackFinished();
         if (this.lastTrackInfo && this.onTrackFinishedCallback) {
-            this.onTrackFinishedCallback(isFinished ? 'finish' : 'skip', this.lastTrackInfo);
+            const listenMs = this.lastPositionMs;
+            this.onTrackFinishedCallback(isFinished ? 'finish' : 'skip', { ...this.lastTrackInfo, listenMs });
         }
     }
 
@@ -607,6 +712,63 @@ export class SpotifyRemoteService {
             this.lastPositionMs = 0;
             this.lastTrackInfo = null;
             console.log('[SpotifyRemote] Polling stopped');
+        }
+    }
+    /**
+     * Lazy Validation: Try to play/queue. If invalid URI, search, update Graph, and retry.
+     */
+    async queueOrRecover(uri: string, metadata: { name: string; artist: string; nodeId?: number }) {
+        if (!uri) return;
+
+        try {
+            // 1. Try with existing URI
+            await this.addToQueue(uri);
+        } catch (e: any) {
+            // 2. Catch 404/400 (Invalid ID)
+            const isInvalidId = e.response?.status === 404 || e.response?.status === 400 || (e.message && e.message.includes('Invalid'));
+
+            if (isInvalidId && metadata.name) {
+                console.warn(`[SpotifyRemote] Invalid URI ${uri} for ${metadata.name}. Attempting recovery...`);
+
+                // 3. Search for track
+                const query = `${metadata.name} ${metadata.artist}`;
+                const results = await this.search(query, 'track');
+
+                if (results.length > 0) {
+                    const freshTrack = results[0];
+                    console.log(`[SpotifyRemote] Recovered ${metadata.name}: ${freshTrack.uri}`);
+
+                    // 4. Update Graph (Self-Healing)
+                    // We use getEffectiveNode to ensure it updates the existing node if ID passed, or creates/updates by name
+                    if (metadata.nodeId) {
+                        await graphService.getEffectiveNode('SONG', metadata.name, freshTrack.uri, { artist: metadata.artist });
+                    }
+
+                    // 5. Retry
+                    await this.addToQueue(freshTrack.uri);
+                    return;
+                }
+            }
+            throw e; // Rethrow if not recoverable
+        }
+    }
+
+    async playOrRecover(uri: string, metadata: { name: string; artist: string; nodeId?: number }) {
+        try {
+            await this.play(uri);
+        } catch (e: any) {
+            const isInvalidId = e.response?.status === 404 || e.response?.status === 400;
+            if (isInvalidId && metadata.name) {
+                console.warn(`[SpotifyRemote] Invalid URI ${uri}. Recovering...`);
+                const results = await this.search(`${metadata.name} ${metadata.artist}`, 'track');
+                if (results.length > 0) {
+                    const freshUri = results[0].uri;
+                    await graphService.getEffectiveNode('SONG', metadata.name, freshUri, { artist: metadata.artist });
+                    await this.play(freshUri);
+                    return;
+                }
+            }
+            throw e;
         }
     }
 }

@@ -4,12 +4,18 @@
  */
 
 import axios from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
 import { SPOTIFY_TOKEN_URL } from '../../services/spotify/constants';
 import { dbService } from '../../services/database';
 import { hasGeminiKeys, hasSpotifyKeys, loadTestApiKeys, validateSpotifyCredentials } from './testApiKeys';
 
 // Re-export for convenience
 export { hasGeminiKeys, hasSpotifyKeys };
+
+// Track last token refresh time to avoid excessive refreshes
+let lastTokenRefreshTime = 0;
+const TOKEN_REFRESH_INTERVAL = 45 * 60 * 1000; // Refresh if token is 45+ minutes old
 
 /**
  * Clear all test data from database
@@ -63,11 +69,44 @@ export async function clearTestTokens(services: string[]): Promise<void> {
 }
 
 /**
+ * Update .env.test file with new tokens
+ */
+function updateEnvTestFile(accessToken: string, refreshToken: string): void {
+    try {
+        const envPath = path.resolve(process.cwd(), '.env.test');
+        if (!fs.existsSync(envPath)) {
+            console.warn('[TestUtils] .env.test file not found, cannot update tokens');
+            return;
+        }
+
+        let content = fs.readFileSync(envPath, 'utf-8');
+
+        // Update access token
+        content = content.replace(
+            /SPOTIFY_ACCESS_TOKEN=.*/,
+            `SPOTIFY_ACCESS_TOKEN=${accessToken}`
+        );
+
+        // Update refresh token
+        content = content.replace(
+            /SPOTIFY_REFRESH_TOKEN=.*/,
+            `SPOTIFY_REFRESH_TOKEN=${refreshToken}`
+        );
+
+        fs.writeFileSync(envPath, content);
+        console.log('[TestUtils] ✓ Updated .env.test with new Spotify tokens');
+    } catch (e) {
+        console.warn('[TestUtils] Failed to update .env.test:', e);
+    }
+}
+
+/**
  * Try to refresh Spotify access token using refresh_token from env/DB.
- * Updates DB with new access_token on success.
+ * Updates DB AND .env.test with new access_token on success.
  */
 async function tryRefreshSpotifyToken(clientId: string, refreshToken: string): Promise<string | null> {
     try {
+        console.log('[TestUtils] Refreshing Spotify token...');
         const response = await axios.post(
             SPOTIFY_TOKEN_URL,
             new URLSearchParams({
@@ -81,12 +120,53 @@ async function tryRefreshSpotifyToken(clientId: string, refreshToken: string): P
         const new_refresh = response.data?.refresh_token || refreshToken;
         if (access_token) {
             await dbService.setServiceToken('spotify', access_token, new_refresh);
+            // Also update .env.test so future test runs use the fresh token
+            updateEnvTestFile(access_token, new_refresh);
+            // Update process.env for current run
+            process.env.SPOTIFY_ACCESS_TOKEN = access_token;
+            process.env.SPOTIFY_REFRESH_TOKEN = new_refresh;
+            lastTokenRefreshTime = Date.now();
+            console.log('[TestUtils] ✓ Spotify token refreshed successfully');
             return access_token;
         }
-    } catch (_) {
-        // Caller will report session inactive
+    } catch (e: any) {
+        console.error('[TestUtils] Token refresh failed:', e.response?.data || e.message);
     }
     return null;
+}
+
+/**
+ * Proactively refresh Spotify token if it's getting old.
+ * Call this before long-running test operations.
+ */
+export async function ensureFreshSpotifyToken(): Promise<boolean> {
+    const timeSinceRefresh = Date.now() - lastTokenRefreshTime;
+
+    // If we recently refreshed, skip
+    if (lastTokenRefreshTime > 0 && timeSinceRefresh < TOKEN_REFRESH_INTERVAL) {
+        return true;
+    }
+
+    const keys = loadTestApiKeys();
+    const clientId = keys.spotifyClientId || await dbService.getPreference('spotify_client_id');
+    const refreshToken = keys.spotifyRefreshToken || await dbService.getRefreshToken('spotify');
+
+    if (!clientId || !refreshToken) {
+        console.warn('[TestUtils] Cannot refresh token: missing clientId or refreshToken');
+        return false;
+    }
+
+    const newToken = await tryRefreshSpotifyToken(clientId, refreshToken);
+    return !!newToken;
+}
+
+/**
+ * Wrapper for API calls that ensures token is fresh before each call.
+ * Use this for long-running integration tests.
+ */
+export async function withFreshToken<T>(operation: () => Promise<T>): Promise<T> {
+    await ensureFreshSpotifyToken();
+    return operation();
 }
 
 /** Spotify-only session check: set tokens from env, call /v1/me, on 401 refresh and retry once. */

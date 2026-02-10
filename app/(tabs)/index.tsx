@@ -14,6 +14,7 @@ import { useAutoDJ } from '@/hooks/useAutoDJ';
 import { recommendationService } from '@/services/core/RecommendationService';
 import { validatedQueueService } from '@/services/core/ValidatedQueueService';
 import { voiceService } from '@/services/core/VoiceService';
+import { spotifyRemote } from '@/services/spotify/SpotifyRemoteService';
 import { usePlayerStore } from '@/stores/PlayerStore';
 import { useSettingsStore } from '@/stores/SettingsStore';
 import { useSkipTracker } from '@/stores/SkipTrackerStore';
@@ -118,10 +119,10 @@ export default function HomeScreen() {
   const { startAutoSync, stopAutoSync, progressMs } = usePlayerStore();
 
   useEffect(() => {
-    // Start syncing when screen is active
-    startAutoSync(1000); // 1s interval for UI updates
+    // Fast sync on Home (1s); when leaving tab don't stop — fall back to 5s so background/settings still get skip detection
+    startAutoSync(1000);
     return () => {
-      stopAutoSync();
+      usePlayerStore.getState().startAutoSync(5000);
     };
   }, []);
 
@@ -187,6 +188,11 @@ export default function HomeScreen() {
     // Clear seen URIs for fresh vibe (allows tracks from previous vibes)
     validatedQueueService.clearSession();
 
+    // Add seed track URI to seen list to prevent it from appearing in expansion
+    if (option.track?.uri) {
+      validatedQueueService.addToSeenUris([option.track.uri]);
+    }
+
     // CRITICAL: Reset skip tracker and set rescue mode to prevent false skip detection
     // during vibe setup (track changes happen rapidly while building queue)
     resetSkipTracker();
@@ -232,21 +238,60 @@ export default function HomeScreen() {
       const fullList = [seedTrack];
       const uniqueSet = new Set([seedTrack.uri]);
 
+      console.log(`[HomeScreen] Building track list. Seed: "${seedTrack.title}" [${seedTrack.uri}]`);
+
       if (expandedItems && expandedItems.length > 0) {
         for (const item of expandedItems) {
-          if (!uniqueSet.has(item.uri)) {
-            uniqueSet.add(item.uri);
-            fullList.push(item);
+          if (!item.uri) {
+            console.log(`[HomeScreen] Skipping item without URI: "${item.title}"`);
+            continue;
           }
+          if (uniqueSet.has(item.uri)) {
+            console.log(`[HomeScreen] Skipping duplicate: "${item.title}" [${item.uri}]`);
+            continue;
+          }
+          uniqueSet.add(item.uri);
+          fullList.push(item);
         }
       }
+
+      // FALLBACK: If expansion failed (only seed track), fetch user's top tracks
+      if (fullList.length < 3) {
+        console.log('[HomeScreen] Expansion failed, fetching top tracks as fallback...');
+        try {
+          // Get session history URIs to exclude already-played tracks
+          const sessionUris = new Set(usePlayerStore.getState().sessionHistory.map(h => h.uri));
+
+          const topTracks = await spotifyRemote.getUserTopTracks(20, 'short_term'); // Fetch more to filter
+          if (topTracks && topTracks.length > 0) {
+            for (const t of topTracks) {
+              // Skip if: no URI, already in our list, or in session history
+              if (!t.uri || uniqueSet.has(t.uri) || sessionUris.has(t.uri)) continue;
+              uniqueSet.add(t.uri);
+              fullList.push({
+                title: t.name,
+                artist: t.artists?.[0]?.name || 'Unknown',
+                uri: t.uri,
+                artwork: t.album?.images?.[0]?.url,
+                reason: 'Fallback favorite'
+              });
+              if (fullList.length >= 10) break; // Cap at 10 tracks
+            }
+          }
+        } catch (e) {
+          console.warn('[HomeScreen] Fallback fetch failed:', e);
+        }
+      }
+
+      console.log(`[HomeScreen] Final track list: ${fullList.length} unique tracks:`);
+      fullList.forEach((t, i) => console.log(`  ${i + 1}. "${t.title}" by ${t.artist} [${t.uri}]`));
 
       // 3. Play All At Once (Replaces Spotify Context & Queue)
       await usePlayerStore.getState().playVibe(fullList);
 
       recommendationService.recordPlay(seedTrack, false, { source: 'vibe_select' });
 
-      if (expandedItems && expandedItems.length > 0) {
+      if (fullList.length > 1) {
         setGeminiReasoning(`Vibe set: ${option.title}`);
       } else {
         setGeminiReasoning("Vibe set (Queue expansion failed).");
@@ -299,11 +344,8 @@ export default function HomeScreen() {
       colors={[activeTheme.gradientStart, activeTheme.gradientMid, activeTheme.gradientEnd]}
       style={[styles.gradient, { paddingTop: insets.top + 10 }]}
     >
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Header */}
+      {/* Fixed top: header + Refresh Vibe (never scroll away) */}
+      <View style={styles.fixedTop}>
         <Animated.View entering={FadeInDown.delay(100).duration(600)} style={styles.header}>
           <View style={styles.logoContainer}>
             <LinearGradient
@@ -336,6 +378,41 @@ export default function HomeScreen() {
           </View>
         </Animated.View>
 
+        <Animated.View entering={FadeInDown.delay(150).duration(500)} style={styles.vibeButtonTop}>
+          <AnimatedPressable
+            onPress={handleRefreshVibe}
+            disabled={isLoading}
+            style={refreshButtonStyle}
+            {...createPressHandlers(refreshScale)}
+          >
+            <LinearGradient
+              colors={[activeTheme.aiPurple, activeTheme.accentGradientEnd]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={[styles.refreshGradient, isLoading && styles.refreshDisabled]}
+            >
+              {isLoading ? (
+                <>
+                  <Animated.View style={spinStyle}>
+                    <Ionicons name="sync" size={18} color="#fff" />
+                  </Animated.View>
+                  <Text style={styles.refreshText}>Analyzing...</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="sparkles" size={18} color="#fff" />
+                  <Text style={styles.refreshText}>Refresh Vibe</Text>
+                </>
+              )}
+            </LinearGradient>
+          </AnimatedPressable>
+        </Animated.View>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Album Art Section */}
         <Animated.View entering={FadeIn.delay(200).duration(800)} style={styles.artSection}>
           <AnimatedAlbumArt
@@ -420,36 +497,6 @@ export default function HomeScreen() {
           </AnimatedPressable>
         </Animated.View>
 
-        {/* Refresh Button */}
-        <Animated.View entering={FadeInUp.delay(500).duration(600)} style={styles.footer}>
-          <AnimatedPressable
-            onPress={handleRefreshVibe}
-            disabled={isLoading}
-            style={refreshButtonStyle}
-            {...createPressHandlers(refreshScale)}
-          >
-            <LinearGradient
-              colors={[activeTheme.aiPurple, activeTheme.accentGradientEnd]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={[styles.refreshGradient, isLoading && styles.refreshDisabled]}
-            >
-              {isLoading ? (
-                <>
-                  <Animated.View style={spinStyle}>
-                    <Ionicons name="sync" size={18} color="#fff" />
-                  </Animated.View>
-                  <Text style={styles.refreshText}>Analyzing...</Text>
-                </>
-              ) : (
-                <>
-                  <Ionicons name="sparkles" size={18} color="#fff" />
-                  <Text style={styles.refreshText}>Refresh Vibe</Text>
-                </>
-              )}
-            </LinearGradient>
-          </AnimatedPressable>
-        </Animated.View>
       </ScrollView>
 
       {/* Overlays */}
@@ -475,6 +522,9 @@ const styles = StyleSheet.create({
   gradient: {
     flex: 1,
   },
+  fixedTop: {
+    paddingHorizontal: 24,
+  },
   scrollContent: {
     paddingBottom: 100,
   },
@@ -482,9 +532,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 24,
     marginTop: 20,
-    marginBottom: 20,
+    marginBottom: 8,
   },
   // Logo & Header Styles
   logoContainer: {
@@ -528,6 +577,10 @@ const styles = StyleSheet.create({
   headerButtons: {
     flexDirection: 'row',
     gap: 12,
+  },
+  vibeButtonTop: {
+    alignItems: 'center',
+    marginBottom: 16,
   },
   settingsButton: {
     width: 44,

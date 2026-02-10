@@ -82,9 +82,8 @@ export function useAutoDJ() {
                             await voiceService.playSongIntro(firstTrack.title, firstTrack.artist, true, false);
                         } catch (e) { console.warn('[AutoDJ] Voice intro failed:', e); }
 
-                        // 4. Play Vibe (Replaces Context completely)
-                        // Using playVibe ensures we replace the queue and avoid "Up Next" issues
-                        await usePlayerStore.getState().playVibe(tracksToPlay);
+                        // 4. Play Vibe (Replaces Context completely). Do not commit to graph — cache until user picks a new vibe.
+                        await usePlayerStore.getState().playVibe(tracksToPlay, { commitPreviousVibe: false });
                         usePlayerStore.getState().setMood(newVibe);
 
                         recordAITrigger(result.reasoning);

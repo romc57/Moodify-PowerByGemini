@@ -203,8 +203,29 @@ class GeminiService {
     }
 
     private parseJsonResponse(text: string): any {
+        if (!text || typeof text !== 'string') {
+            console.error('[Gemini] Empty or invalid response text');
+            this.emitError(GeminiErrors.parseError('Empty response from Gemini'));
+            return {};
+        }
+
+        // Clean markdown code blocks and whitespace
+        let cleanedText = text
+            .replace(/```json\s*/gi, '')
+            .replace(/```\s*/g, '')
+            .trim();
+
+        // Handle responses that start with explanation text before JSON
+        const jsonStart = cleanedText.search(/[\[{]/);
+        if (jsonStart > 0) {
+            console.warn(`[Gemini] Found ${jsonStart} chars before JSON, trimming`);
+            cleanedText = cleanedText.slice(jsonStart);
+        }
+
+        // Strip any text AFTER the closing bracket/brace (common Gemini issue)
+        cleanedText = this.extractJsonOnly(cleanedText);
+
         try {
-            const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
             const parsed = JSON.parse(cleanedText);
 
             if (parsed === null || (typeof parsed !== 'object' && !Array.isArray(parsed))) {
@@ -216,34 +237,116 @@ class GeminiService {
             return parsed;
         } catch (error: any) {
             console.error('[Gemini] JSON parse error:', error.message);
+            console.debug('[Gemini] Failed text (first 500 chars):', cleanedText.slice(0, 500));
 
-            // Attempt repair for truncated arrays
-            const repairedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-            if (repairedText.startsWith('[')) {
-                const objectMatches: any[] = [];
-                const objectPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
-                let match;
-
-                while ((match = objectPattern.exec(repairedText)) !== null) {
-                    try {
-                        const obj = JSON.parse(match[0]);
-                        if (obj && obj.id && obj.title) {
-                            objectMatches.push(obj);
-                        }
-                    } catch {
-                        // Skip malformed
-                    }
-                }
-
-                if (objectMatches.length > 0) {
-                    console.log(`[Gemini] Repaired: Salvaged ${objectMatches.length} items`);
-                    return objectMatches;
-                }
+            // Attempt repair for truncated JSON
+            const repaired = this.attemptJsonRepair(cleanedText);
+            if (repaired !== null) {
+                console.log('[Gemini] JSON repair successful');
+                return repaired;
             }
 
             this.emitError(GeminiErrors.parseError(error.message));
             throw error;
         }
+    }
+
+    /**
+     * Extract only the JSON portion, stripping trailing explanation text
+     */
+    private extractJsonOnly(text: string): string {
+        if (!text) return text;
+
+        const isArray = text.startsWith('[');
+        const isObject = text.startsWith('{');
+
+        if (!isArray && !isObject) return text;
+
+        // Find the matching closing bracket by counting
+        let depth = 0;
+        let inString = false;
+        let lastValidEnd = -1;
+        const openChar = isArray ? '[' : '{';
+        const closeChar = isArray ? ']' : '}';
+
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            const prevChar = i > 0 ? text[i - 1] : '';
+
+            // Handle string boundaries
+            if (char === '"' && prevChar !== '\\') {
+                inString = !inString;
+                continue;
+            }
+
+            if (inString) continue;
+
+            if (char === openChar) {
+                depth++;
+            } else if (char === closeChar) {
+                depth--;
+                if (depth === 0) {
+                    lastValidEnd = i;
+                    break; // Found the matching close
+                }
+            }
+        }
+
+        if (lastValidEnd > 0 && lastValidEnd < text.length - 1) {
+            const trailing = text.slice(lastValidEnd + 1).trim();
+            if (trailing.length > 0) {
+                console.warn(`[Gemini] Stripped ${trailing.length} chars of trailing text after JSON`);
+            }
+            return text.slice(0, lastValidEnd + 1);
+        }
+
+        return text;
+    }
+
+    private attemptJsonRepair(text: string): any | null {
+        // Try fixing truncated arrays by extracting complete objects
+        if (text.startsWith('[')) {
+            const objectMatches: any[] = [];
+            const objectPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
+            let match;
+
+            while ((match = objectPattern.exec(text)) !== null) {
+                try {
+                    const obj = JSON.parse(match[0]);
+                    // Accept objects with common expected fields
+                    if (obj && (obj.title || obj.name || obj.id || obj.vibe)) {
+                        objectMatches.push(obj);
+                    }
+                } catch {
+                    // Skip malformed objects
+                }
+            }
+
+            if (objectMatches.length > 0) {
+                console.log(`[Gemini] Repaired array: Salvaged ${objectMatches.length} items`);
+                return objectMatches;
+            }
+        }
+
+        // Try fixing truncated objects by closing braces
+        if (text.startsWith('{')) {
+            const openBraces = (text.match(/\{/g) || []).length;
+            const closeBraces = (text.match(/\}/g) || []).length;
+            const missing = openBraces - closeBraces;
+
+            if (missing > 0 && missing <= 3) {
+                const fixed = text + '}'.repeat(missing);
+                try {
+                    const parsed = JSON.parse(fixed);
+                    console.log(`[Gemini] Repaired object: Added ${missing} closing braces`);
+                    return parsed;
+                } catch {
+                    // Still failed
+                }
+            }
+        }
+
+        return null;
     }
 
     private emitError(error: ServiceError): void {
@@ -258,7 +361,13 @@ class GeminiService {
         const status = error.response?.status;
         const errorMessage = error.response?.data?.error?.message || error.message || '';
 
-        console.error('[Gemini] Error:', { status, message: errorMessage });
+        console.error('[Gemini] Error:', { status, message: errorMessage, context });
+
+        // JSON parse errors are already emitted by parseJsonResponse - don't double-emit
+        if (error instanceof SyntaxError || error.name === 'SyntaxError') {
+            console.warn(`[Gemini] JSON parse error in ${context} (already emitted)`);
+            return;
+        }
 
         if (status === 400) {
             if (errorMessage.includes('thoughtSignature') || errorMessage.includes('Invalid Argument')) {
@@ -406,8 +515,19 @@ class GeminiService {
         const apiKey = await this.getApiKey();
         if (!apiKey) return false;
 
-        const status = await this.testModel(this.currentModel, apiKey);
-        return status.available;
+        // Try current model first, then fallback to others
+        for (const modelId of [this.currentModel, ...MODEL_PRIORITY.filter(m => m !== this.currentModel)]) {
+            const status = await this.testModel(modelId, apiKey);
+            if (status.available) {
+                // Update current model to the one that works
+                if (modelId !== this.currentModel) {
+                    console.log(`[Gemini] Falling back from ${this.currentModel} to ${modelId}`);
+                    this.currentModel = modelId;
+                }
+                return true;
+            }
+        }
+        return false;
     }
 
     async generateDJRecommendation(
@@ -431,7 +551,9 @@ class GeminiService {
         );
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.STANDARD }, true);
+            console.time('[Perf] Gemini Generation');
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.SMALL, thinkingLevel: 'low' }, true);
+            console.timeEnd('[Perf] Gemini Generation');
             const text = this.extractResponseText(response);
             if (!text) return null;
 
@@ -456,6 +578,7 @@ class GeminiService {
 
     async getVibeOptions(
         recentHistory: any[],
+        clusterReps: { name: string; artist: string }[],
         favorites: string[],
         userInstruction: string,
         excludeTracks: string[] = []
@@ -465,13 +588,14 @@ class GeminiService {
 
         const prompt = GeminiPrompts.generateVibeOptionsPrompt(
             recentHistory,
+            clusterReps,
             favorites,
             userInstruction,
             excludeTracks
         );
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.LARGE }, true);
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.LARGE, thinkingLevel: 'low' }, true);
             const text = this.extractResponseText(response);
             if (!text) return [];
 
@@ -494,7 +618,7 @@ class GeminiService {
         const prompt = GeminiPrompts.generateRescueVibePrompt(recentSkips, favorites, excludeTracks);
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.LARGE }, true);
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.STANDARD, thinkingLevel: 'medium' }, true);
             const text = this.extractResponseText(response);
             if (!text) return null;
 
@@ -513,6 +637,7 @@ class GeminiService {
     async expandVibe(
         seedTrack: { title: string; artist: string },
         recentHistory: any[],
+        neighbors: { name: string; artist: string }[],
         favorites: string[],
         excludeTracks: string[] = []
     ): Promise<{ items: any[]; mood?: string }> {
@@ -522,17 +647,26 @@ class GeminiService {
         const prompt = GeminiPrompts.generateVibeExpansionPrompt(
             seedTrack,
             recentHistory,
+            neighbors,
             favorites,
             excludeTracks
         );
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.MEDIUM }, true);
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.MEDIUM, thinkingLevel: 'low' }, true);
             const text = this.extractResponseText(response);
             if (!text) return { items: [] };
 
             const parsed = this.parseJsonResponse(text);
-            return { items: parsed.items || [], mood: parsed.mood || parsed.mood_description };
+            const items = parsed.items || [];
+
+            // Log what Gemini returned
+            console.log(`[Gemini] expandVibe returned ${items.length} tracks:`);
+            items.forEach((item: any, i: number) => {
+                console.log(`  ${i + 1}. "${item.title || item.t}" - ${item.artist || item.a}`);
+            });
+
+            return { items, mood: parsed.mood || parsed.mood_description };
         } catch (error: any) {
             this.handleGeminiError(error, 'expandVibe');
             return { items: [] };
@@ -555,7 +689,7 @@ class GeminiService {
         const prompt = GeminiPrompts.generateMoodAssessmentPrompt(currentTrack, recentHistory, userContext);
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.SMALL }, true);
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.SMALL, thinkingLevel: 'minimal' }, true);
             const text = this.extractResponseText(response);
             if (!text) return null;
 

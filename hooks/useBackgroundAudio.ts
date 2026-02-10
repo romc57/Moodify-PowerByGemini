@@ -1,12 +1,13 @@
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import { useEffect } from 'react';
+import { Platform } from 'react-native';
 
 /**
- * Configures the audio session to allow background playback.
- * This is critical for the "AutoDJ" feature to work when the screen is off.
+ * Configures the audio session to allow background playback (native only).
  */
 export function useBackgroundAudio() {
     useEffect(() => {
+        if (Platform.OS === 'web') return;
         async function configureAudio() {
             try {
                 await Audio.setAudioModeAsync({
