@@ -5,8 +5,14 @@ import { gemini } from '../gemini/GeminiService';
 import { spotifyRemote } from '../spotify/SpotifyRemoteService';
 import { RawTrackSuggestion, validatedQueueService } from './ValidatedQueueService';
 
+const EXCLUSION_CACHE_TTL_MS = 30_000; // 30 seconds
+
 export class RecommendationService {
     private static instance: RecommendationService;
+
+    // Exclusion cache with TTL
+    private exclusionCache: string[] | null = null;
+    private exclusionCacheTime: number = 0;
 
     private constructor() { }
 
@@ -17,13 +23,27 @@ export class RecommendationService {
         return RecommendationService.instance;
     }
 
+    /** Invalidate the exclusion cache (call on vibe changes). */
+    invalidateExclusionCache(): void {
+        this.exclusionCache = null;
+        this.exclusionCacheTime = 0;
+    }
+
     /**
-     * Get combined exclusion list from DB daily history + current session
+     * Get combined exclusion list from DB daily history + current session.
+     * Cached for 30s to avoid rebuilding on every call.
      */
     private async getExclusions(): Promise<string[]> {
+        const now = Date.now();
+        if (this.exclusionCache && (now - this.exclusionCacheTime) < EXCLUSION_CACHE_TTL_MS) {
+            return this.exclusionCache;
+        }
+
         const dailyExclusions = await dbService.getDailyHistory();
         const sessionExclusions = usePlayerStore.getState().sessionHistory.map(h => `${h.title} - ${h.artist}`);
-        return Array.from(new Set([...dailyExclusions, ...sessionExclusions]));
+        this.exclusionCache = Array.from(new Set([...dailyExclusions, ...sessionExclusions]));
+        this.exclusionCacheTime = now;
+        return this.exclusionCache;
     }
 
     /**
@@ -50,21 +70,17 @@ export class RecommendationService {
      */
     async getVibeOptions(userInstruction: string = ''): Promise<any[]> {
         try {
+            this.invalidateExclusionCache(); // Fresh exclusions for new vibe selection
             const history = await dbService.getRecentHistory(20);
             const allExclusions = await this.getExclusions();
             const favorites = await this.getFavorites(10, 'short_term');
 
-            // Fetch Graph Cluster Representatives for context
-            let clusterReps: { name: string; artist: string }[] = [];
+            // Fetch full taste profile from graph for richer Gemini context
+            let tasteProfile: { clusterReps: { name: string; artist: string; playCount?: number }[]; topGenres?: { name: string; songCount: number }[]; recentVibes?: string[]; audioProfile?: { energy: number; valence: number; danceability: number } | null } = { clusterReps: [] };
             try {
-                const reps = await graphService.getClusterRepresentatives(4);
-                clusterReps = reps.map(r => {
-                    // r.data is already parsed by GraphService, so handle both cases
-                    const data = typeof r.data === 'string' ? JSON.parse(r.data || '{}') : (r.data || {});
-                    return { name: r.name, artist: data.artist || 'Unknown' };
-                });
+                tasteProfile = await graphService.getTasteProfile();
             } catch (e) {
-                console.warn('[RecService] Failed to fetch cluster reps', e);
+                console.warn('[RecService] Failed to fetch taste profile', e);
             }
 
             console.log(`[RecService] Generating Vibe Options (Excluding ${allExclusions.length} tracks)...`);
@@ -72,7 +88,7 @@ export class RecommendationService {
             // Request 8 options (optimized for speed - target is 8)
             const options = await gemini.getVibeOptions(
                 history,
-                clusterReps,
+                tasteProfile,
                 favorites,
                 userInstruction,
                 allExclusions
@@ -202,13 +218,23 @@ export class RecommendationService {
                 console.warn('[RecService] Failed to fetch neighbors', e);
             }
 
-            // 2. Call Gemini for "Discovery" (with neighbors context)
+            // 2. Fetch top genres for richer context
+            let topGenreNames: string[] = [];
+            try {
+                const genres = await graphService.getTopGenres(6);
+                topGenreNames = genres.map(g => g.name);
+            } catch (e) {
+                console.warn('[RecService] Failed to fetch top genres for expansion', e);
+            }
+
+            // 3. Call Gemini for "Discovery" (with neighbors + genres context)
             const result = await gemini.expandVibe(
                 seedTrack,
                 history,
                 neighbors,
                 favorites,
-                allExclusions
+                allExclusions,
+                topGenreNames
             );
 
             // 3. Hybrid Combination

@@ -7,6 +7,9 @@ import { useErrorStore } from '@/stores/ErrorStore';
 import { Alert } from 'react-native';
 import { create } from 'zustand';
 
+/** Minimum listen time (ms) for a track to count as "visited" in graph commits */
+const GRAPH_COMMIT_LISTEN_THRESHOLD_MS = 60_000;
+
 export interface Track {
     title: string;
     artist: string;
@@ -26,6 +29,7 @@ interface PlayerState {
     assessedMood: string | null;
     isLoading: boolean;
     isQueueModifying: boolean; // LOCK for queue operations
+    isSyncing: boolean; // Guard against re-entrant syncFromSpotify calls
 
     // Queue State
     currentTrack: Track | null;
@@ -149,6 +153,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     lastActionTime: 0,
     autoSyncInterval: null,
 
+    isSyncing: false,
     currentMood: null,
     assessedMood: null,
     setMood: (mood) => set({ currentMood: mood }),
@@ -176,7 +181,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
         // 2. Start Remote Polling for Track Changes (Skip/Finish)
         // This handles "backend" logic like recording plays
-        const MIN_LISTEN_MS = 60_000;
+        const MIN_LISTEN_MS = GRAPH_COMMIT_LISTEN_THRESHOLD_MS;
         spotifyRemote.startPolling(async (type, track) => {
             const listenMs = track.listenMs ?? 0;
             console.log(`[PlayerStore] Track detected as ${type}: ${track.title} (listened ${Math.round(listenMs / 1000)}s)`);
@@ -217,6 +222,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     // Sync state from Spotify - the source of truth
     syncFromSpotify: async () => {
         try {
+            // Prevent re-entrant sync calls
+            if (get().isSyncing) return;
+
             // Prevent sync race condition (Double Switch Fix)
             const timeSinceLastAction = Date.now() - get().lastActionTime;
             if (timeSinceLastAction < 1500) { // Reduced lockout
@@ -226,6 +234,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
             if (get().isLoading || get().isQueueModifying) {
                 return;
             }
+
+            set({ isSyncing: true });
 
             // 1. Get Playback State
             const state = await spotifyRemote.getCurrentState();
@@ -310,6 +320,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
             }
         } catch (err) {
             // console.warn('[PlayerStore] Sync from Spotify error:', err);
+        } finally {
+            set({ isSyncing: false });
         }
     },
 
@@ -318,7 +330,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         const { currentMood, sessionHistory } = get();
         if (!currentMood || sessionHistory.length === 0) return;
 
-        const MIN_LISTEN_MS = 60_000;
+        const MIN_LISTEN_MS = GRAPH_COMMIT_LISTEN_THRESHOLD_MS;
         // Extract bare Spotify ID from URI (spotify:track:abc123 → abc123) so it matches ingested node IDs
         const bareId = (uri: string) => uri?.replace(/^spotify:track:/, '') ?? '';
         const songsToCommit = sessionHistory.map(h => ({

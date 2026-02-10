@@ -190,6 +190,19 @@ export default function TabLayout() {
           }}
         />
         <Tabs.Screen
+          name="graph"
+          options={{
+            title: 'Graph',
+            tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+              <AnimatedTabIcon
+                name={focused ? 'git-network' : 'git-network-outline'}
+                focused={focused}
+                color={color}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
           name="settings"
           options={{
             title: 'Settings',

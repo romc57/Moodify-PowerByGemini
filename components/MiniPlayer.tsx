@@ -97,8 +97,9 @@ export const MiniPlayer = () => {
     transform: [{ scale: nextScale.value }],
   }));
 
-  // Hide on Home Screen (Main Player)
+  // Hide on Home Screen (Main Player) and Graph Screen
   if (pathname === '/') return null;
+  if (pathname === '/graph') return null;
   if (!currentTrack) return null;
 
   const MiniPlayerContent = () => (

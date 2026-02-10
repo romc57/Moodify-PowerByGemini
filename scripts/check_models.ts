@@ -1,7 +1,13 @@
 
 const axios = require('axios');
+require('dotenv').config({ path: '.env.test' });
 
-const API_KEY = 'AIzaSyDhdmfftnjz-SGJy8a-QhxIOlGTSgEhPVA';
+const API_KEY = process.env.GEMINI_API_KEY;
+
+if (!API_KEY) {
+    console.error('Error: GEMINI_API_KEY not set. Add it to .env.test or pass via environment.');
+    process.exit(1);
+}
 
 const MODELS_TO_TEST = [
     // Current Configurations

@@ -578,7 +578,12 @@ class GeminiService {
 
     async getVibeOptions(
         recentHistory: any[],
-        clusterReps: { name: string; artist: string }[],
+        tasteProfile: {
+            clusterReps: { name: string; artist: string; playCount?: number }[];
+            topGenres?: { name: string; songCount: number }[];
+            recentVibes?: string[];
+            audioProfile?: { energy: number; valence: number; danceability: number } | null;
+        },
         favorites: string[],
         userInstruction: string,
         excludeTracks: string[] = []
@@ -588,7 +593,7 @@ class GeminiService {
 
         const prompt = GeminiPrompts.generateVibeOptionsPrompt(
             recentHistory,
-            clusterReps,
+            tasteProfile,
             favorites,
             userInstruction,
             excludeTracks
@@ -639,7 +644,8 @@ class GeminiService {
         recentHistory: any[],
         neighbors: { name: string; artist: string }[],
         favorites: string[],
-        excludeTracks: string[] = []
+        excludeTracks: string[] = [],
+        topGenres: string[] = []
     ): Promise<{ items: any[]; mood?: string }> {
         const apiKey = await this.getApiKey();
         if (!apiKey) return { items: [] };
@@ -649,7 +655,8 @@ class GeminiService {
             recentHistory,
             neighbors,
             favorites,
-            excludeTracks
+            excludeTracks,
+            topGenres
         );
 
         try {

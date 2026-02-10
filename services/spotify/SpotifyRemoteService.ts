@@ -367,15 +367,18 @@ export class SpotifyRemoteService {
         try {
             return await makeRequest(token);
         } catch (error: any) {
-            // Handle 401 (Unauthorized) or 403 (Forbidden) by refreshing token
             const status = error.response?.status;
-            if (status === 401 || status === 403 || error.message === 'NO_TOKEN') {
+            // Only refresh on 401 (expired token). 403 = Forbidden = scope/quota, refresh won't help.
+            if (status === 401 || error.message === 'NO_TOKEN') {
                 console.log(`[SpotifyRemote] Auth error (${status || 'NO_TOKEN'}) - Attempting auto-refresh...`);
                 token = await this.refreshAccessToken();
                 if (token) {
                     console.log('[SpotifyRemote] Refresh successful, retrying request...');
                     return await makeRequest(token);
                 }
+            }
+            if (status === 403) {
+                console.warn('[SpotifyRemote] 403 Forbidden - endpoint may require different scope or app permission.');
             }
             throw error;
         }

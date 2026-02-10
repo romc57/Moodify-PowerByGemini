@@ -356,7 +356,12 @@ const getAllHandlers = [
         handle: (p) => store.feedback_history.slice(0, p[0] || 5)
     },
 
-    // Graph Nodes
+    // Graph Nodes - all nodes (for getGraphSnapshot)
+    {
+        match: (s) => s.includes('graph_nodes') && s.includes('SELECT *') && !s.includes('ORDER BY'),
+        handle: () => Array.from(store.graph_nodes.values()).map(n => ({ ...n })),
+    },
+    // Graph Nodes - by last_played_at
     {
         match: (s) => s.includes('graph_nodes') && s.includes('ORDER BY last_played_at DESC'),
         handle: (p) => {
@@ -366,6 +371,18 @@ const getAllHandlers = [
                 .sort((a, b) => b.last_played_at - a.last_played_at)
                 .slice(0, limit);
         }
+    },
+
+    // Graph Edges - all edges (for getGraphSnapshot)
+    {
+        match: (s) => s.includes('graph_edges') && s.includes('SELECT *') && !s.includes('graph_nodes'),
+        handle: () => store.graph_edges.map(e => ({
+            source_id: e.source_id,
+            target_id: e.target_id,
+            type: e.type,
+            weight: e.weight,
+            created_at: e.created_at,
+        })),
     },
 
     // Graph Neighbors
@@ -428,6 +445,10 @@ function createDb() {
                 }
             }
             return Promise.resolve([]);
+        },
+
+        withTransactionAsync(fn) {
+            return Promise.resolve(fn());
         },
 
         closeAsync: () => Promise.resolve()

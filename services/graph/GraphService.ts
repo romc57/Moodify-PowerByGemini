@@ -1,20 +1,30 @@
 import { dbService } from '@/services/database';
 // Note: spotifyRemote is imported lazily in ingestLikedSongs() to avoid require cycle
 
-export type NodeType = 'SONG' | 'ARTIST' | 'VIBE' | 'AUDIO_FEATURE' | 'GENRE';
-export type EdgeType = 'SIMILAR' | 'NEXT' | 'RELATED' | 'HAS_FEATURE' | 'HAS_GENRE';
+export type NodeType = 'SONG' | 'ARTIST' | 'GENRE' | 'VIBE' | 'AUDIO_FEATURE';
+export type EdgeType = 'SIMILAR' | 'SAME_ARTIST' | 'IN_GENRE' | 'HAS_VIBE' | 'NEXT' | 'RELATED' | 'HAS_GENRE' | 'HAS_FEATURE';
 
 export interface GraphNode {
     id: number;
     type: NodeType;
-    spotify_id: string | null;
     name: string;
-    data: any;
-    play_count: number;
-    last_played_at: number;
+    spotify_id: string | null;
+    data: string | null; // JSON string
+    created_at?: string;
+    play_count?: number;
+    last_played_at?: number;
+    x?: number;
+    y?: number;
 }
 
-class GraphService {
+export interface GraphEdge {
+    source: number;
+    target: number;
+    type: EdgeType;
+    weight: number;
+}
+
+export class GraphService {
     private static instance: GraphService;
 
     // In-memory fallback for Web/No-SQL environments
@@ -378,23 +388,19 @@ class GraphService {
      * Excludes songs played "today" (since midnight).
      */
     async getCandidates(limit: number = 5): Promise<GraphNode[]> {
-        if (!dbService.database) await dbService.init();
-
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-        const todayTimestamp = todayStart.getTime();
+        if (!dbService.database) {
+            // Memory path: return most recently played SONG nodes
+            const songNodes: GraphNode[] = [];
+            for (const node of this.memoryNodes.values()) {
+                if (node.type === 'SONG') songNodes.push(node);
+            }
+            return songNodes
+                .sort((a, b) => (b.last_played_at || 0) - (a.last_played_at || 0))
+                .slice(0, limit);
+        }
 
         try {
-            // Normalize "Last Played" logic.
-            // If we want "Context", we might want RECENTLY played nodes (history)
-            // If we want "Candidates" for suggestions, we want favorites/neighbors.
-
-            // For now, let's return the most recently played nodes that were NOT played today? 
-            // Wait, "Last 5 Nodes visited" implies recently played.
-            // But the user rule "User will not get a song that was played at the same day" applies to SUGGESTIONS.
-
-            // This method seems to serve the "Context" history.
-            const result = await dbService.database?.getAllAsync<any>(
+            const result = await dbService.database.getAllAsync<any>(
                 'SELECT * FROM graph_nodes WHERE type = "SONG" ORDER BY last_played_at DESC LIMIT ?',
                 [limit]
             );
@@ -410,29 +416,46 @@ class GraphService {
      * Get suggestions from the graph (traversal).
      * Filters out songs played today.
      */
-    async getNextSuggestedNode(currentNodeId: number): Promise<GraphNode | null> {
-        if (!dbService.database) await dbService.init();
-
+    async getNextSuggestedNode(currentNodeId: number, excludeIds: Set<number> = new Set()): Promise<GraphNode | null> {
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
         const todayTimestamp = todayStart.getTime();
 
+        // Memory fallback path
+        if (!dbService.database) {
+            const candidates: { node: GraphNode; weight: number }[] = [];
+            for (const edge of this.memoryEdges) {
+                if (edge.source !== currentNodeId) continue;
+                const targetNode = this.memoryNodes.get(edge.target);
+                if (!targetNode || targetNode.type !== 'SONG') continue;
+                if (targetNode.last_played_at >= todayTimestamp) continue;
+                if (excludeIds.has(targetNode.id)) continue;
+                candidates.push({ node: targetNode, weight: edge.weight });
+            }
+            candidates.sort((a, b) => b.weight - a.weight);
+            return candidates.length > 0 ? candidates[0].node : null;
+        }
+
         try {
-            // Find neighbors with highest weight
-            // Exclude nodes played today
-            const result = await dbService.database?.getFirstAsync<any>(
-                `SELECT n.* 
+            // Fetch top 10 candidates and find first non-excluded
+            const results = await dbService.database?.getAllAsync<any>(
+                `SELECT n.*
                  FROM graph_edges e
                  JOIN graph_nodes n ON e.target_id = n.id
-                 WHERE e.source_id = ? 
+                 WHERE e.source_id = ?
                  AND n.last_played_at < ?
+                 AND n.type = 'SONG'
                  ORDER BY e.weight DESC
-                 LIMIT 1`,
+                 LIMIT 10`,
                 [currentNodeId, todayTimestamp]
             );
 
-            if (result) {
-                return { ...result, data: JSON.parse(result.data || '{}') };
+            if (results) {
+                for (const result of results) {
+                    if (!excludeIds.has(result.id)) {
+                        return { ...result, data: JSON.parse(result.data || '{}') };
+                    }
+                }
             }
 
             return null;
@@ -446,11 +469,22 @@ class GraphService {
      * Get all neighbors of a node (for Context)
      */
     async getNeighbors(nodeId: number, limit: number = 5): Promise<{ name: string; artist: string; weight: number }[]> {
-        if (!dbService.database) await dbService.init();
+        if (!dbService.database) {
+            // Memory path: traverse edges from nodeId, resolve target nodes
+            const neighbors: { name: string; artist: string; weight: number }[] = [];
+            for (const edge of this.memoryEdges) {
+                if (edge.source !== nodeId) continue;
+                const targetNode = this.memoryNodes.get(edge.target);
+                if (!targetNode) continue;
+                const data = typeof targetNode.data === 'string' ? JSON.parse(targetNode.data || '{}') : (targetNode.data || {});
+                neighbors.push({ name: targetNode.name, artist: data.artist || 'Unknown', weight: edge.weight });
+            }
+            return neighbors.sort((a, b) => b.weight - a.weight).slice(0, limit);
+        }
 
         try {
-            const results = await dbService.database?.getAllAsync<any>(
-                `SELECT n.name, n.data, e.weight 
+            const results = await dbService.database.getAllAsync<any>(
+                `SELECT n.name, n.data, e.weight
                  FROM graph_edges e
                  JOIN graph_nodes n ON e.target_id = n.id
                  WHERE e.source_id = ?
@@ -676,6 +710,7 @@ class GraphService {
             console.log(`[GraphService] Audio phase: ${similarEdgeCount} SIMILAR edges across ${buckets.size} buckets`);
 
             this.persistToStorage();
+            this.invalidateCache(); // Clear cache so next view gets fresh data
             await dbService.setPreference('graph_ingested_liked', 'true');
             initStore.setStatusMessage('Ingestion complete!');
             initStore.setProgress({ current: allSongs.length, total: allSongs.length });
@@ -691,7 +726,49 @@ class GraphService {
      * "Give Gemini 2 songs from each big cluster"
      */
     async getClusterRepresentatives(limit: number = 8): Promise<GraphNode[]> {
-        if (!dbService.database) return [];
+        if (!dbService.database) {
+            // Memory path: collect SONG nodes, sort by play_count desc, pick diverse artists
+            const songNodes: GraphNode[] = [];
+            for (const node of this.memoryNodes.values()) {
+                if (node.type === 'SONG') songNodes.push(node);
+            }
+            songNodes.sort((a, b) => (b.play_count || 0) - (a.play_count || 0));
+
+            const selected: GraphNode[] = [];
+            const selectedIds = new Set<number>();
+
+            // 1. Pick top one
+            if (songNodes.length === 0) return [];
+            selected.push(songNodes[0]);
+            selectedIds.add(songNodes[0].id);
+
+            // 2. Pick others with artist diversity
+            for (let i = 1; i < songNodes.length && selected.length < limit; i++) {
+                const cand = songNodes[i];
+                const candData = typeof cand.data === 'string' ? JSON.parse(cand.data || '{}') : (cand.data || {});
+                const sameArtist = selected.some(s => {
+                    const sData = typeof s.data === 'string' ? JSON.parse(s.data || '{}') : (s.data || {});
+                    return sData.artist === candData.artist;
+                });
+                if (!sameArtist) {
+                    selected.push(cand);
+                    selectedIds.add(cand.id);
+                }
+            }
+
+            // Fill rest if needed
+            if (selected.length < limit) {
+                for (const c of songNodes) {
+                    if (!selectedIds.has(c.id)) {
+                        selected.push(c);
+                        selectedIds.add(c.id);
+                        if (selected.length >= limit) break;
+                    }
+                }
+            }
+
+            return selected;
+        }
 
         try {
             // Fetch candidates (Top 50 played/connected)
@@ -710,12 +787,10 @@ class GraphService {
             selectedIds.add(first.id);
 
             // 2. Pick others that are NOT connected to selected (Simple Diversity)
-            // We use artist diversity as a proxy for clusters if no edges data easily available here without heavy queries
             for (let i = 1; i < candidates.length && selected.length < limit; i++) {
                 const cand = candidates[i];
                 const candData = JSON.parse(cand.data || '{}');
 
-                // Check if artist already in selected
                 const sameArtist = selected.some(s => {
                     const sData = JSON.parse(s.data || '{}');
                     return sData.artist === candData.artist;
@@ -743,6 +818,100 @@ class GraphService {
             console.error('[GraphService] Cluster Reps Error', e);
             return [];
         }
+    }
+
+    /**
+     * Get a rich taste profile for Gemini prompts.
+     * Returns cluster reps, top genres, recent vibes, and average audio profile.
+     */
+    async getTasteProfile(): Promise<{
+        clusterReps: { name: string; artist: string; playCount: number }[];
+        topGenres: { name: string; songCount: number }[];
+        recentVibes: string[];
+        audioProfile: { energy: number; valence: number; danceability: number } | null;
+    }> {
+        // 1. Cluster representatives (6, up from 4)
+        const reps = await this.getClusterRepresentatives(6);
+        const clusterReps = reps.map(r => {
+            const data = typeof r.data === 'string' ? JSON.parse(r.data || '{}') : (r.data || {});
+            return { name: r.name, artist: data.artist || 'Unknown', playCount: r.play_count || 0 };
+        });
+
+        // 2. Top genres (8)
+        const genres = await this.getTopGenres(8);
+        const topGenres = genres.map(g => ({ name: g.name, songCount: g.songCount }));
+
+        // 3. Recent vibes (last 5 VIBE nodes by last_played_at)
+        let recentVibes: string[] = [];
+        if (!dbService.database) {
+            // Memory path
+            const vibeNodes: GraphNode[] = [];
+            for (const node of this.memoryNodes.values()) {
+                if (node.type === 'VIBE') vibeNodes.push(node);
+            }
+            recentVibes = vibeNodes
+                .sort((a, b) => (b.last_played_at || 0) - (a.last_played_at || 0))
+                .slice(0, 5)
+                .map(v => v.name);
+        } else {
+            try {
+                const vibes = await dbService.database.getAllAsync<any>(
+                    `SELECT name FROM graph_nodes WHERE type = 'VIBE' ORDER BY last_played_at DESC LIMIT 5`
+                );
+                recentVibes = (vibes || []).map((v: any) => v.name);
+            } catch (e) {
+                console.error('[GraphService] getTasteProfile vibes error', e);
+            }
+        }
+
+        // 4. Average audio profile from top-played songs
+        let audioProfile: { energy: number; valence: number; danceability: number } | null = null;
+        if (!dbService.database) {
+            // Memory path: average from all SONG nodes with audio data
+            let totalE = 0, totalV = 0, totalD = 0, count = 0;
+            for (const node of this.memoryNodes.values()) {
+                if (node.type !== 'SONG') continue;
+                const d = typeof node.data === 'string' ? JSON.parse(node.data || '{}') : (node.data || {});
+                if (typeof d.energy === 'number') {
+                    totalE += d.energy;
+                    totalV += d.valence || 0;
+                    totalD += d.danceability || 0;
+                    count++;
+                }
+            }
+            if (count > 0) {
+                audioProfile = {
+                    energy: Math.round((totalE / count) * 100) / 100,
+                    valence: Math.round((totalV / count) * 100) / 100,
+                    danceability: Math.round((totalD / count) * 100) / 100,
+                };
+            }
+        } else {
+            try {
+                const result = await dbService.database.getFirstAsync<any>(
+                    `SELECT
+                        AVG(json_extract(data, '$.energy')) as avg_energy,
+                        AVG(json_extract(data, '$.valence')) as avg_valence,
+                        AVG(json_extract(data, '$.danceability')) as avg_dance
+                     FROM graph_nodes
+                     WHERE type = 'SONG'
+                     AND json_extract(data, '$.energy') IS NOT NULL
+                     ORDER BY play_count DESC
+                     LIMIT 100`
+                );
+                if (result && result.avg_energy != null) {
+                    audioProfile = {
+                        energy: Math.round(result.avg_energy * 100) / 100,
+                        valence: Math.round(result.avg_valence * 100) / 100,
+                        danceability: Math.round(result.avg_dance * 100) / 100,
+                    };
+                }
+            } catch (e) {
+                console.error('[GraphService] getTasteProfile audio error', e);
+            }
+        }
+
+        return { clusterReps, topGenres, recentVibes, audioProfile };
     }
 
     /**
@@ -794,34 +963,95 @@ class GraphService {
         }
     }
 
+    // --- Caching ---
+    private snapshotCache: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
+
+    public invalidateCache() {
+        this.snapshotCache = null;
+        console.log('[GraphService] Cache invalidated');
+    }
+
     /**
-     * Get the entire graph state for visualization (Debug only).
-     * Edges are normalized to { source, target, type, weight } for d3.forceLink.
+     * Save node positions to cache and storage to skip simulation warmup on next load.
      */
-    async getGraphSnapshot(): Promise<{ nodes: GraphNode[], edges: { source: number; target: number; type: EdgeType; weight: number }[] }> {
-        if (!dbService.database) {
-            return {
-                nodes: Array.from(this.memoryNodes.values()),
-                edges: this.memoryEdges.map(e => ({ source: e.source, target: e.target, type: e.type, weight: e.weight }))
-            };
+    public async saveGraphPositions(nodes: { id: number; x: number; y: number }[]): Promise<void> {
+        console.log(`[GraphService] Saving positions for ${nodes.length} nodes...`);
+        let updatedCount = 0;
+
+        // 1. Update Memory
+        for (const n of nodes) {
+            const node = this.memoryNodes.get(n.id);
+            if (node) {
+                node.x = n.x;
+                node.y = n.y;
+                updatedCount++;
+            }
         }
 
-        if (!dbService.database) await dbService.init();
+        // 2. Persist to Storage (Async)
+        // We only persist to localStorage on Web for now as SQLite requires schema migration for x/y
+        // which is overkill for a catchy feature.
+        if (!dbService.database) {
+            this.persistToStorage();
+        }
+
+        // 3. Update Snapshot Cache if exists
+        if (this.snapshotCache) {
+            const posMap = new Map(nodes.map(n => [n.id, n]));
+            this.snapshotCache.nodes.forEach(n => {
+                const pos = posMap.get(n.id);
+                if (pos) {
+                    n.x = pos.x;
+                    n.y = pos.y;
+                }
+            });
+        }
+
+        console.log(`[GraphService] Saved positions for ${updatedCount} nodes.`);
+    }
+
+    /**
+     * Get a snapshot of the current graph state (nodes and edges).
+     * Used for visualization and initial loading.
+     * @param forceRefresh - If true, bypass cache and fetch from DB.
+     */
+    async getGraphSnapshot(forceRefresh: boolean = false): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+        if (!forceRefresh && this.snapshotCache) {
+            console.log('[GraphService] Returning cached graph snapshot');
+            return this.snapshotCache;
+        }
+
+        if (!dbService.database) {
+            // Memory fallback
+            const result = {
+                nodes: Array.from(this.memoryNodes.values()),
+                edges: this.memoryEdges.map(e => ({ ...e, weight: e.weight || 1.0 })),
+            };
+            this.snapshotCache = result;
+            return result;
+        }
 
         try {
-            const nodes = await dbService.database?.getAllAsync<any>('SELECT * FROM graph_nodes');
-            const rawEdges = await dbService.database?.getAllAsync<any>('SELECT * FROM graph_edges');
-            const edges = (rawEdges || []).map((e: any) => ({
+            console.time('[Perf] getGraphSnapshot DB Fetch');
+            const nodes = await dbService.database.getAllAsync<GraphNode>('SELECT * FROM graph_nodes');
+            const rawEdges = await dbService.database.getAllAsync<any>('SELECT * FROM graph_edges');
+            console.timeEnd('[Perf] getGraphSnapshot DB Fetch');
+
+            // Ensure data is parsed correctly for nodes
+            const parsedNodes = nodes.map(n => ({ ...n, data: JSON.parse(n.data || '{}') }));
+
+            // Map raw edges to GraphEdge format
+            const edges: GraphEdge[] = rawEdges.map((e: any) => ({
                 source: e.source_id,
                 target: e.target_id,
                 type: e.type as EdgeType,
-                weight: e.weight ?? 1
+                weight: e.weight ?? 1.0
             }));
 
-            return {
-                nodes: nodes?.map((n: any) => ({ ...n, data: JSON.parse(n.data || '{}') })) || [],
-                edges
-            };
+            const result = { nodes: parsedNodes, edges };
+            this.snapshotCache = result;
+            console.log(`[GraphService] Cached ${result.nodes.length} nodes and ${result.edges.length} edges`);
+            return result;
         } catch (e) {
             console.error('[GraphService] getGraphSnapshot Error', e);
             return { nodes: [], edges: [] };
@@ -1014,6 +1244,7 @@ class GraphService {
         // Clear ingestion flag
         await dbService.setPreference('graph_ingested_liked', '');
 
+        this.snapshotCache = null;
         console.log('[GraphService] Graph cleared.');
     }
 }

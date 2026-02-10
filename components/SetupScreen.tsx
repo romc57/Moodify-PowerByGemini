@@ -69,15 +69,23 @@ export const SetupScreen = () => {
             }
 
             // 4. Check Graph
+            // 4. Check Graph
             const graphIngestedPref = await dbService.getPreference('graph_ingested_liked');
             const isGraphPopulated = await graphService.isGraphPopulated();
 
-            // If pref says yes but graph is empty (Web Reload or DB Wipe), we must re-ingest.
-            if (graphIngestedPref === 'true' && !isGraphPopulated) {
-                console.log('[Setup] Graph preference true but DB empty. Re-ingesting...');
-                await dbService.setPreference('graph_ingested_liked', 'false');
-            }
-            if (graphIngestedPref !== 'true' || !isGraphPopulated) {
+            // OPTIMIZATION: If data exists, trust it (and fix pref if missing)
+            if (isGraphPopulated) {
+                if (graphIngestedPref !== 'true') {
+                    console.log('[Setup] Graph populated but pref missing. Auto-healing...');
+                    await dbService.setPreference('graph_ingested_liked', 'true');
+                }
+                // Fall through to READY
+            } else {
+                // Graph EMPTY. Need ingestion.
+                if (graphIngestedPref === 'true') {
+                    console.log('[Setup] Graph preference true but DB empty. Re-ingesting...');
+                    await dbService.setPreference('graph_ingested_liked', 'false');
+                }
                 setStep('GRAPH');
                 setIsChecking(false);
                 return;

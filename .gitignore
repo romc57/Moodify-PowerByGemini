@@ -33,6 +33,23 @@ yarn-error.*
 # local env files (only test env files exist - app uses settings UI, not env files)
 .env*.local
 .env.test
+.env
+
+# secrets & credentials
+*.pem
+*.key
+*.p12
+*.p8
+*.jks
+credentials.json
+service-account*.json
+
+# database files (generated at runtime)
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
 
 # typescript
 *.tsbuildinfo
@@ -42,3 +59,6 @@ app-example
 # generated native folders
 /ios
 /android
+
+# logs
+*.log

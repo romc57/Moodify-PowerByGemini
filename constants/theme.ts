@@ -104,6 +104,10 @@ export interface ModernTheme {
   background: string;
   secondaryText: string;
   accent: string;
+
+  // Added for SetupScreen
+  secondary: string;
+  error: string;
 }
 
 export const MODERN_THEMES: Record<ThemeName, ModernTheme> = {
@@ -144,6 +148,8 @@ export const MODERN_THEMES: Record<ThemeName, ModernTheme> = {
     background: '#0D0D0D',
     secondaryText: 'rgba(255, 255, 255, 0.7)',
     accent: '#667EEA',
+    secondary: '#764BA2',
+    error: '#EF4444',
   },
 
   aurora: {
@@ -183,6 +189,8 @@ export const MODERN_THEMES: Record<ThemeName, ModernTheme> = {
     background: '#0F0F23',
     secondaryText: 'rgba(255, 255, 255, 0.7)',
     accent: '#00D9F5',
+    secondary: '#00D9F5',
+    error: '#EF4444',
   },
 
   sunset: {
@@ -222,6 +230,8 @@ export const MODERN_THEMES: Record<ThemeName, ModernTheme> = {
     background: '#1A0A0A',
     secondaryText: 'rgba(255, 255, 255, 0.7)',
     accent: '#FEE140',
+    secondary: '#FEE140',
+    error: '#EF4444',
   },
 
   neon: {
@@ -261,6 +271,8 @@ export const MODERN_THEMES: Record<ThemeName, ModernTheme> = {
     background: '#000000',
     secondaryText: 'rgba(255, 255, 255, 0.8)',
     accent: '#7928CA',
+    secondary: '#7928CA',
+    error: '#EF4444',
   },
 
   ocean: {
@@ -300,6 +312,8 @@ export const MODERN_THEMES: Record<ThemeName, ModernTheme> = {
     background: '#0A1628',
     secondaryText: 'rgba(255, 255, 255, 0.7)',
     accent: '#2E3192',
+    secondary: '#2E3192',
+    error: '#EF4444',
   },
 };
 

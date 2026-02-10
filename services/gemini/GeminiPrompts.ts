@@ -36,13 +36,18 @@ Rules:NEVER suggest songs from H list,popular,no mega-hits
    */
   generateVibeOptionsPrompt: (
     recentHistory: { track_name: string; artist_name: string }[],
-    clusterReps: { name: string; artist: string }[],
+    tasteProfile: {
+      clusterReps: { name: string; artist: string; playCount?: number }[];
+      topGenres?: { name: string; songCount: number }[];
+      recentVibes?: string[];
+      audioProfile?: { energy: number; valence: number; danceability: number } | null;
+    },
     favorites: string[],
     userInstruction: string,
     excludeTracks: string[] = []
   ) => {
     const safeHistory = recentHistory || [];
-    const safeClusters = clusterReps || [];
+    const safeClusters = tasteProfile.clusterReps || [];
     const safeFavorites = favorites || [];
     const safeExclude = excludeTracks || [];
 
@@ -51,18 +56,35 @@ Rules:NEVER suggest songs from H list,popular,no mega-hits
       : 'None';
 
     const clustersCompact = safeClusters.length > 0
-      ? safeClusters.map(c => `${c.name}|${c.artist}`).join(';')
+      ? safeClusters.map(c => `${c.name}|${c.artist}${c.playCount ? `(${c.playCount})` : ''}`).join(';')
       : 'None';
+
+    const genresCompact = tasteProfile.topGenres && tasteProfile.topGenres.length > 0
+      ? tasteProfile.topGenres.map(g => `${g.name}(${g.songCount})`).join(';')
+      : '';
+
+    const vibesCompact = tasteProfile.recentVibes && tasteProfile.recentVibes.length > 0
+      ? tasteProfile.recentVibes.join(';')
+      : '';
+
+    const audioCompact = tasteProfile.audioProfile
+      ? `E:${tasteProfile.audioProfile.energy}|V:${tasteProfile.audioProfile.valence}|D:${tasteProfile.audioProfile.danceability}`
+      : '';
 
     const favCompact = safeFavorites.length > 0 ? safeFavorites.slice(0, 8).join(';') : 'Any';
     const excludeCompact = safeExclude.length > 0 ? safeExclude.slice(0, 50).join(';') : 'None';
 
-    const prompt = `You are a music curator. JSON. 16 vibe options.
+    let prompt = `You are a music curator. JSON. 16 vibe options.
 Ctx(History):${historyCompact}
-Ctx(Taste Clusters):${clustersCompact}
-Fav:${favCompact}
-${userInstruction ? `Hint:${userInstruction}` : ''}
-EXCLUDE:${excludeCompact}
+Ctx(Taste Clusters):${clustersCompact}`;
+
+    if (genresCompact) prompt += `\nCtx(Genres):${genresCompact}`;
+    if (vibesCompact) prompt += `\nCtx(Recent Vibes):${vibesCompact}`;
+    if (audioCompact) prompt += `\nCtx(Audio Profile):${audioCompact}`;
+
+    prompt += `\nFav:${favCompact}`;
+    if (userInstruction) prompt += `\nHint:${userInstruction}`;
+    prompt += `\nEXCLUDE:${excludeCompact}
 Rules:
 1. 4 'Familiar' from Taste Clusters.
 2. 4 'Adjacent' (similar genre).
@@ -84,29 +106,36 @@ Output:{"options":[{"id":"v1","title":"Name","description":"Mood","track":{"t":"
     recentHistory: any[],
     neighbors: { name: string; artist: string }[],
     favorites: string[],
-    excludeTracks: string[] = []
+    excludeTracks: string[] = [],
+    topGenres: string[] = []
   ) => {
     const safeExclude = excludeTracks || [];
     const safeNeighbors = neighbors || [];
     const safeHistory = recentHistory || [];
     const safeFavorites = favorites || [];
+    const safeGenres = topGenres || [];
 
     const excludeCompact = safeExclude.slice(0, 50).join(';');
     const neighborsCompact = safeNeighbors.slice(0, 10).map(n => `${n.name}|${n.artist}`).join(';');
-    // Minimal history context
     const historyCompact = safeHistory.slice(0, 5).map(h => `${h.track_name}|${h.artist_name}`).join(';');
+    const genresCompact = safeGenres.slice(0, 6).join(';');
 
-    return `Curator. JSON. 5 DISTINCT tracks like: ${seedTrack.title}|${seedTrack.artist}
-Ctx(Neighbors-Avoid):${neighborsCompact}
-Ctx(History):${historyCompact}
-Fav:${safeFavorites.slice(0, 5).join(';')}
+    let prompt = `Curator. JSON. 5 DISTINCT tracks like: ${seedTrack.title}|${seedTrack.artist}
+Ctx(Known-Neighbors):${neighborsCompact}
+Ctx(History):${historyCompact}`;
+
+    if (genresCompact) prompt += `\nCtx(User Genres):${genresCompact}`;
+
+    prompt += `\nFav:${safeFavorites.slice(0, 5).join(';')}
 EXCLUDE:${excludeCompact}
 Rules:
-1. Suggest 5 'Discovery' songs (NOT in Neighbors).
+1. Suggest 5 'Discovery' songs (NOT in Known-Neighbors).
 2. Allow 'Fav' if not played recently.
 3. Match energy/mood.
 4. Minimal JSON keys (t=title, a=artist).
 Output:{"mood":"vibe","items":[{"t":"Title","a":"Artist"}]}`;
+
+    return prompt;
   },
 
   /**

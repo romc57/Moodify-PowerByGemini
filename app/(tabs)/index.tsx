@@ -344,7 +344,7 @@ export default function HomeScreen() {
       colors={[activeTheme.gradientStart, activeTheme.gradientMid, activeTheme.gradientEnd]}
       style={[styles.gradient, { paddingTop: insets.top + 10 }]}
     >
-      {/* Fixed top: header + Refresh Vibe (never scroll away) */}
+      {/* Fixed top: header only (never scrolls away) */}
       <View style={styles.fixedTop}>
         <Animated.View entering={FadeInDown.delay(100).duration(600)} style={styles.header}>
           <View style={styles.logoContainer}>
@@ -376,36 +376,6 @@ export default function HomeScreen() {
               <Ionicons name="settings-outline" size={22} color={activeTheme.textSecondary} />
             </Pressable>
           </View>
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.delay(150).duration(500)} style={styles.vibeButtonTop}>
-          <AnimatedPressable
-            onPress={handleRefreshVibe}
-            disabled={isLoading}
-            style={refreshButtonStyle}
-            {...createPressHandlers(refreshScale)}
-          >
-            <LinearGradient
-              colors={[activeTheme.aiPurple, activeTheme.accentGradientEnd]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={[styles.refreshGradient, isLoading && styles.refreshDisabled]}
-            >
-              {isLoading ? (
-                <>
-                  <Animated.View style={spinStyle}>
-                    <Ionicons name="sync" size={18} color="#fff" />
-                  </Animated.View>
-                  <Text style={styles.refreshText}>Analyzing...</Text>
-                </>
-              ) : (
-                <>
-                  <Ionicons name="sparkles" size={18} color="#fff" />
-                  <Text style={styles.refreshText}>Refresh Vibe</Text>
-                </>
-              )}
-            </LinearGradient>
-          </AnimatedPressable>
         </Animated.View>
       </View>
 
@@ -443,6 +413,37 @@ export default function HomeScreen() {
               totalTime={totalTime}
             />
           </View>
+
+          {/* Refresh Vibe Button (inline, after waveform) */}
+          <Animated.View entering={FadeInDown.delay(350).duration(500)} style={styles.vibeButtonInline}>
+            <AnimatedPressable
+              onPress={handleRefreshVibe}
+              disabled={isLoading}
+              style={refreshButtonStyle}
+              {...createPressHandlers(refreshScale)}
+            >
+              <LinearGradient
+                colors={[activeTheme.aiPurple, activeTheme.accentGradientEnd]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={[styles.refreshGradient, isLoading && styles.refreshDisabled]}
+              >
+                {isLoading ? (
+                  <>
+                    <Animated.View style={spinStyle}>
+                      <Ionicons name="sync" size={18} color="#fff" />
+                    </Animated.View>
+                    <Text style={styles.refreshText}>Analyzing...</Text>
+                  </>
+                ) : (
+                  <>
+                    <Ionicons name="sparkles" size={18} color="#fff" />
+                    <Text style={styles.refreshText}>Refresh Vibe</Text>
+                  </>
+                )}
+              </LinearGradient>
+            </AnimatedPressable>
+          </Animated.View>
 
           {/* AI Reasoning Chip */}
           <View style={styles.chipContainer}>
@@ -578,9 +579,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
   },
-  vibeButtonTop: {
+  vibeButtonInline: {
     alignItems: 'center',
-    marginBottom: 16,
+    marginTop: 24,
   },
   settingsButton: {
     width: 44,

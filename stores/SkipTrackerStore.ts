@@ -2,13 +2,18 @@ import { dbService } from '@/services/database';
 import { graphService } from '@/services/graph/GraphService';
 import { create } from 'zustand';
 
+/** Listening duration below this (seconds) counts as a "skip" */
+const SKIP_THRESHOLD_SECONDS = 30;
+/** Number of consecutive skips to trigger AI rescue */
+const RESCUE_SKIP_THRESHOLD = 3;
+
 interface SkipEvent {
     trackId: string;
     trackName: string;
     artist: string;
     listenDuration: number; // seconds
     timestamp: number;
-    wasSkipped: boolean; // true if < 60 seconds
+    wasSkipped: boolean; // true if < 30 seconds
 }
 
 interface AITriggerHistory {
@@ -92,7 +97,7 @@ export const useSkipTracker = create<SkipTrackerState>((set, get) => ({
 
         // Calculate listening duration
         const duration = (Date.now() - listeningStartTime) / 1000;
-        const wasSkipped = duration < 30; // Changed to 30s as per requirement
+        const wasSkipped = duration < SKIP_THRESHOLD_SECONDS;
 
         // Log to Database
         dbService.addHistoryItem(
@@ -151,7 +156,7 @@ export const useSkipTracker = create<SkipTrackerState>((set, get) => ({
 
     shouldTriggerAI: () => {
         const { consecutiveSkips } = get();
-        return consecutiveSkips >= 3;
+        return consecutiveSkips >= RESCUE_SKIP_THRESHOLD;
     },
 
     shouldExpandVibe: () => {
@@ -176,16 +181,24 @@ export const useSkipTracker = create<SkipTrackerState>((set, get) => ({
         const { aiHistory } = get();
         const newTriggerCount = aiHistory.triggerCount + 1;
 
+        // Update triggerCount first, then derive strategy from getAIStrategy()
+        // to ensure consistent strategy computation in one place
         set({
             aiHistory: {
+                ...aiHistory,
                 triggerCount: newTriggerCount,
                 lastTriggerTime: Date.now(),
                 lastPickedTrack: pickedTrack,
-                strategy: newTriggerCount === 1 ? 'exploratory' : newTriggerCount > 1 ? 'refined' : 'conservative'
             },
             consecutiveSkips: 0,
             consecutiveListens: 0
         });
+
+        // Derive strategy after state update so getAIStrategy() sees the new triggerCount
+        const strategy = get().getAIStrategy();
+        set(state => ({
+            aiHistory: { ...state.aiHistory, strategy }
+        }));
     },
 
     recordExpansionTrigger: () => {
@@ -209,6 +222,7 @@ export const useSkipTracker = create<SkipTrackerState>((set, get) => ({
             recentSkips: [],
             consecutiveSkips: 0,
             consecutiveListens: 0,
+            isRescueMode: false,
             aiHistory: {
                 triggerCount: 0,
                 lastTriggerTime: 0,
