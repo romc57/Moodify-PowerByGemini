@@ -34,6 +34,9 @@ jobs:
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }} # Optional if public repo but good practice
 
+      - name: Add .nojekyll file
+        run: touch ./dist/.nojekyll
+
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
