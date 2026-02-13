@@ -6,6 +6,24 @@
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img src="assets/screenshots/setup.png" width="220" alt="Setup — Enter your Gemini API key and connect Spotify">&nbsp;&nbsp;
+  <img src="assets/screenshots/vibes.png" width="220" alt="Vibe Selection — Pick from 8 AI-curated vibes">&nbsp;&nbsp;
+  <img src="assets/screenshots/graph.png" width="220" alt="Knowledge Graph — Interactive visualization of your music taste">&nbsp;&nbsp;
+  <img src="assets/screenshots/player.png" width="220" alt="Now Playing — Playback with Auto DJ and Rescue Mode">
+</p>
+
+<p align="center">
+  <em>Setup &amp; API Validation</em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <em>AI Vibe Curation</em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <em>Knowledge Graph</em>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <em>Now Playing</em>
+</p>
+
+---
+
 ## Gemini 3 Integration
 
 Moodify uses Gemini 3 Pro as its core reasoning engine to power an **autonomous music DJ agent** that runs continuously during a listening session. The app leverages three Gemini 3-specific features that are central to its operation:
@@ -22,6 +40,7 @@ The model operates as an **orchestrating agent** — not a chatbot. It autonomou
 
 ## Table of Contents
 
+- [Screenshots](#screenshots)
 - [Problem Statement](#problem-statement)
 - [Features](#features)
 - [How It Works](#how-it-works)
