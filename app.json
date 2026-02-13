@@ -56,7 +56,9 @@
       "expo-background-task"
     ],
     "experiments": {
-      "reactCompiler": true
+      "typedRoutes": true,
+      "reactCompiler": true,
+      "baseUrl": "/Moodify-PowerByGemini"
     }
   }
 }
