@@ -284,7 +284,25 @@ class DatabaseServiceWeb {
     async getSecret(key: string): Promise<string | null> {
         await this.ensureInit();
         const secrets = getStorage<Record<string, string>>(STORAGE_KEYS.APP_SECRETS, {});
-        return secrets[key] ?? null;
+
+        // Check local storage first
+        if (secrets[key]) {
+            console.log(`[Database.web] Found secret in storage: ${key}`);
+            return secrets[key];
+        }
+
+        // Fallback to environment variables
+        if (key === 'gemini_api_key' && process.env.GEMINI_API_KEY) {
+            console.log('[Database.web] Using GEMINI_API_KEY from environment');
+            return process.env.GEMINI_API_KEY;
+        }
+
+        if (key === 'spotify_client_id' && process.env.SPOTIFY_CLIENT_ID) {
+            console.log('[Database.web] Using SPOTIFY_CLIENT_ID from environment');
+            return process.env.SPOTIFY_CLIENT_ID;
+        }
+
+        return null;
     }
 }
 
