@@ -285,9 +285,17 @@ export class SpotifyRemoteService {
     async getAudioFeaturesBatch(ids: string[]): Promise<any[]> {
         const results: any[] = [];
         const CHUNK_SIZE = 100;
+        let endpointDead = false;
 
         for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
             const chunk = ids.slice(i, i + CHUNK_SIZE);
+
+            // If first chunk got 403, endpoint is deprecated for this app — skip remaining
+            if (endpointDead) {
+                results.push(...chunk.map(() => null));
+                continue;
+            }
+
             try {
                 const response = await this.request('get', '/audio-features', {}, {
                     ids: chunk.join(',')
@@ -295,8 +303,13 @@ export class SpotifyRemoteService {
                 if (response?.data?.audio_features) {
                     results.push(...response.data.audio_features);
                 }
-            } catch (e) {
-                console.error(`[SpotifyRemote] Audio Features Batch Error (offset ${i})`, e);
+            } catch (e: any) {
+                if (e.response?.status === 403) {
+                    console.warn('[SpotifyRemote] Audio Features endpoint returned 403 (deprecated/restricted). Skipping remaining batches.');
+                    endpointDead = true;
+                } else {
+                    console.error(`[SpotifyRemote] Audio Features Batch Error (offset ${i})`, e);
+                }
                 // Push nulls for failed chunks so indices stay aligned
                 results.push(...chunk.map(() => null));
             }

@@ -434,9 +434,32 @@ class ValidatedQueueService {
             }
 
             const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-            const parsed = JSON.parse(cleanedText);
 
-            return (parsed.items || []).map((item: any) => ({
+            // Use Gemini's robust parser which handles truncated/malformed JSON
+            let parsed: any;
+            try {
+                parsed = JSON.parse(cleanedText);
+            } catch {
+                // Attempt to salvage: extract individual JSON objects from the text
+                const objectMatches: any[] = [];
+                const objectPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
+                let match;
+                while ((match = objectPattern.exec(cleanedText)) !== null) {
+                    try {
+                        const obj = JSON.parse(match[0]);
+                        if (obj && (obj.t || obj.title)) objectMatches.push(obj);
+                    } catch { /* skip malformed */ }
+                }
+                if (objectMatches.length > 0) {
+                    console.log(`[ValidatedQueue] Repaired backfill JSON: salvaged ${objectMatches.length} items`);
+                    parsed = { items: objectMatches };
+                } else {
+                    throw new SyntaxError('Could not parse or repair backfill JSON');
+                }
+            }
+
+            const items = Array.isArray(parsed) ? parsed : (parsed.items || []);
+            return items.map((item: any) => ({
                 title: item.t || item.title,
                 artist: item.a || item.artist,
                 reason: item.reason || 'Backfill suggestion'

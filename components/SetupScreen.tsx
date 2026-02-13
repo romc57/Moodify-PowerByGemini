@@ -19,7 +19,7 @@ export const SetupScreen = () => {
     const activeTheme = THEMES[theme] || THEMES.midnight;
 
     // Use shared Spotify auth hook (single source of truth)
-    const { state: authState, login: spotifyLogin } = useSpotifyAuth();
+    const { state: authState, login: spotifyLogin, refreshClientId } = useSpotifyAuth();
 
     const [inputValue, setInputValue] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -104,7 +104,9 @@ export const SetupScreen = () => {
             setError('Please enter a valid Client ID');
             return;
         }
-        await dbService.setPreference('spotify_client_id', inputValue.trim());
+        const id = inputValue.trim();
+        await dbService.setPreference('spotify_client_id', id);
+        refreshClientId(id); // Synchronously set client ID in auth hook (no DB round-trip)
         setInputValue('');
         setError(null);
         checkStatus();
@@ -115,18 +117,15 @@ export const SetupScreen = () => {
         setError(null);
 
         try {
-            // Check if auth is ready (client ID is set)
             if (!authState.isReady) {
                 setError('Please enter your Spotify Client ID first.');
                 setStep('CLIENT_ID');
-                setIsLoading(false);
                 return;
             }
 
             console.log('[Setup] Starting Spotify Auth with PKCE...');
             console.log('[Setup] Redirect URI:', getRedirectUri());
 
-            // Use the shared auth hook which handles PKCE properly
             const result = await spotifyLogin();
 
             if (result.success) {
@@ -134,38 +133,43 @@ export const SetupScreen = () => {
                 checkStatus();
             } else if (result.cancelled) {
                 console.log('[Setup] Auth cancelled by user');
-                setIsLoading(false);
             } else {
                 setError(result.error || 'Authentication failed');
-                setIsLoading(false);
             }
         } catch (e: any) {
             console.error('[Setup] Auth Error:', e);
             setError(e.message || 'Authentication failed');
+        } finally {
             setIsLoading(false);
         }
     };
 
     const handleGeminiSubmit = async () => {
-        setIsLoading(true);
         if (!inputValue.trim()) {
             setError('Please enter a valid API Key');
-            setIsLoading(false);
             return;
         }
 
-        const key = inputValue.trim();
-        const { valid, error } = await gemini.validateKey(key);
+        setIsLoading(true);
+        setError(null);
 
-        if (valid) {
-            await dbService.setPreference('gemini_api_key', key);
-            setInputValue('');
-            setError(null);
-            checkStatus();
-        } else {
-            setError(error || 'Invalid API Key');
+        try {
+            const key = inputValue.trim();
+            const { valid, error: validationError } = await gemini.validateKey(key);
+
+            if (valid) {
+                await dbService.setPreference('gemini_api_key', key);
+                setInputValue('');
+                checkStatus();
+            } else {
+                setError(validationError || 'Invalid API Key');
+            }
+        } catch (e: any) {
+            console.error('[Setup] Gemini validation error:', e);
+            setError(e.message || 'Failed to validate API key. Check your connection.');
+        } finally {
+            setIsLoading(false);
         }
-        setIsLoading(false);
     };
 
     const startGraphIngestion = async () => {

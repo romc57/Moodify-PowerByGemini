@@ -3,19 +3,12 @@ import { usePlayerStore } from '@/stores/PlayerStore';
 import { useSettingsStore } from '@/stores/SettingsStore';
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { FlatList, StyleSheet, Text, View, ScrollView } from 'react-native';
+import { FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 export default function QueueScreen() {
     const { theme } = useSettingsStore();
     const activeTheme = THEMES[theme] || THEMES.midnight;
-    const { queue, currentTrack, syncFromSpotify, isPlaying } = usePlayerStore();
-
-    // Sync queue from Spotify on mount and periodically
-    React.useEffect(() => {
-        syncFromSpotify();
-        const interval = setInterval(syncFromSpotify, 2000);
-        return () => clearInterval(interval);
-    }, []);
+    const { queue, currentTrack, isPlaying, syncFromSpotify } = usePlayerStore();
 
     const renderQueueItem = ({ item, index }: { item: any; index: number }) => {
         return (
@@ -28,6 +21,13 @@ export default function QueueScreen() {
                 <Text style={[styles.queueNumber, { color: activeTheme.textSecondary }]}>
                     {index + 1}
                 </Text>
+                {item.artwork ? (
+                    <Image source={{ uri: item.artwork }} style={styles.artwork} />
+                ) : (
+                    <View style={[styles.artwork, styles.artworkPlaceholder]}>
+                        <Ionicons name="musical-note" size={16} color={activeTheme.textSecondary} />
+                    </View>
+                )}
                 <View style={styles.trackInfo}>
                     <Text
                         style={[styles.trackTitle, { color: activeTheme.text }]}
@@ -47,6 +47,9 @@ export default function QueueScreen() {
         <ScrollView style={[styles.container, { backgroundColor: activeTheme.background }]}>
             <View style={styles.header}>
                 <Text style={[styles.headerTitle, { color: activeTheme.text }]}>Queue</Text>
+                <Pressable onPress={() => syncFromSpotify()} hitSlop={12}>
+                    <Ionicons name="refresh" size={22} color={activeTheme.textSecondary} />
+                </Pressable>
             </View>
 
             {/* Now Playing Section */}
@@ -64,13 +67,17 @@ export default function QueueScreen() {
                             },
                         ]}
                     >
-                        <View style={styles.nowPlayingIcon}>
-                            <Ionicons
-                                name={isPlaying ? "pause-circle" : "play-circle"}
-                                size={40}
-                                color={activeTheme.spotifyGreen}
-                            />
-                        </View>
+                        {currentTrack.artwork ? (
+                            <Image source={{ uri: currentTrack.artwork }} style={styles.nowPlayingArtwork} />
+                        ) : (
+                            <View style={styles.nowPlayingIcon}>
+                                <Ionicons
+                                    name={isPlaying ? "pause-circle" : "play-circle"}
+                                    size={40}
+                                    color={activeTheme.spotifyGreen}
+                                />
+                            </View>
+                        )}
                         <View style={styles.trackInfo}>
                             <Text
                                 style={[styles.nowPlayingTitle, { color: activeTheme.spotifyGreen }]}
@@ -89,7 +96,7 @@ export default function QueueScreen() {
             {/* Up Next Section */}
             <View style={styles.section}>
                 <Text style={[styles.sectionTitle, { color: activeTheme.textSecondary }]}>
-                    UP NEXT • {queue.length} {queue.length === 1 ? 'track' : 'tracks'}
+                    UP NEXT {queue.length > 0 ? `\u2022 ${queue.length} ${queue.length === 1 ? 'track' : 'tracks'}` : ''}
                 </Text>
 
                 {queue.length === 0 ? (
@@ -118,6 +125,9 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     header: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
         paddingHorizontal: 20,
         paddingTop: 60,
         paddingBottom: 10,
@@ -143,6 +153,12 @@ const styles = StyleSheet.create({
         borderRadius: 16,
         borderWidth: 2,
     },
+    nowPlayingArtwork: {
+        width: 48,
+        height: 48,
+        borderRadius: 8,
+        marginRight: 16,
+    },
     nowPlayingIcon: {
         marginRight: 16,
     },
@@ -167,6 +183,17 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         width: 28,
         textAlign: 'center',
+    },
+    artwork: {
+        width: 40,
+        height: 40,
+        borderRadius: 6,
+        marginRight: 12,
+    },
+    artworkPlaceholder: {
+        backgroundColor: 'rgba(255,255,255,0.1)',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     trackInfo: {
         flex: 1,

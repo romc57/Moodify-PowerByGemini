@@ -4,20 +4,21 @@
  */
 
 import { MiniPlayer } from '@/components/MiniPlayer';
+import { AIActivityIndicator } from '@/components/ui/AIActivityIndicator';
 import { THEMES } from '@/constants/theme';
+import { usePlayerStore } from '@/stores/PlayerStore';
 import { useSettingsStore } from '@/stores/SettingsStore';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Tabs } from 'expo-router';
-import { usePlayerStore } from '@/stores/PlayerStore';
 import React, { useEffect } from 'react';
 import { AppState, AppStateStatus, Platform, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
+    useAnimatedStyle,
+    useSharedValue,
+    withSpring,
 } from 'react-native-reanimated';
 
 // Animated Tab Icon Component
@@ -216,6 +217,7 @@ export default function TabLayout() {
           }}
         />
       </Tabs>
+      <AIActivityIndicator />
       <MiniPlayer />
     </>
   );

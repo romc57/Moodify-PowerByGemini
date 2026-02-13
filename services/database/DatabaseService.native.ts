@@ -35,6 +35,7 @@ class Mutex {
 class DatabaseService {
     private db: SQLite.SQLiteDatabase | null = null;
     private initPromise: Promise<void> | null = null;
+    private initComplete = false;
     private mutex = new Mutex();
 
     constructor() {
@@ -42,8 +43,12 @@ class DatabaseService {
         this.initPromise = this.init();
     }
 
+    /**
+     * Public accessor: only exposes DB after init is fully complete
+     * (schema + migrations). Prevents race conditions with GraphService.
+     */
     public get database(): SQLite.SQLiteDatabase | null {
-        return this.db;
+        return this.initComplete ? this.db : null;
     }
 
     /**
@@ -53,6 +58,11 @@ class DatabaseService {
         if (this.initPromise) {
             await this.initPromise;
         }
+    }
+
+    /** Wait until DB is ready (for GraphService etc. on Android where init is async). */
+    async waitUntilReady(): Promise<void> {
+        await this.ensureInit();
     }
 
     async init() {
@@ -145,10 +155,78 @@ class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);
       CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(type);
     `);
+
+        // Migration: ensure UNIQUE constraint exists on graph_edges (handles pre-existing tables)
+        await this.migrateGraphEdgesUniqueConstraint();
+
+        // Migration: add pos_x/pos_y columns to graph_nodes for position persistence
+        await this.migrateGraphNodesPositionColumns();
+
+        // Mark init complete BEFORE logging — external callers can now use the database
+        this.initComplete = true;
         console.log('[Database] Initialized with New Schema');
 
         // Clear daily log if it's a new day (simple check)
         this.checkAndClearDailyLog();
+    }
+
+    /**
+     * Migration: add UNIQUE(source_id, target_id, type) to graph_edges if missing.
+     * Deduplicates existing rows first (keeps the one with the highest weight).
+     */
+    private async migrateGraphEdgesUniqueConstraint() {
+        if (!this.db) return;
+        try {
+            // Check if the unique index already exists
+            const idx = await this.db.getFirstAsync<{ name: string }>(
+                `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='graph_edges' AND sql LIKE '%UNIQUE%'`
+            );
+            if (idx) return; // Already migrated
+
+            console.log('[Database] Migrating graph_edges: adding UNIQUE constraint...');
+
+            // Deduplicate: keep the row with the highest weight per (source_id, target_id, type)
+            await this.db.runAsync(
+                `DELETE FROM graph_edges WHERE rowid NOT IN (
+                    SELECT rowid FROM (
+                        SELECT rowid, ROW_NUMBER() OVER (
+                            PARTITION BY source_id, target_id, type ORDER BY weight DESC
+                        ) AS rn FROM graph_edges
+                    ) WHERE rn = 1
+                )`
+            );
+
+            // Now create the unique index
+            await this.db.runAsync(
+                `CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_edges_composite_unique ON graph_edges(source_id, target_id, type)`
+            );
+
+            console.log('[Database] Migration complete: graph_edges UNIQUE constraint added.');
+        } catch (e) {
+            console.error('[Database] graph_edges migration failed', e);
+        }
+    }
+
+    /**
+     * Migration: add pos_x/pos_y columns to graph_nodes for position persistence.
+     * Allows skipping D3 force warmup on subsequent app launches.
+     */
+    private async migrateGraphNodesPositionColumns() {
+        if (!this.db) return;
+        try {
+            const cols = await this.db.getAllAsync<{ name: string }>(
+                `PRAGMA table_info(graph_nodes)`
+            );
+            const colNames = new Set(cols.map(c => c.name));
+            if (colNames.has('pos_x')) return; // Already migrated
+
+            console.log('[Database] Migrating graph_nodes: adding pos_x/pos_y columns...');
+            await this.db.runAsync('ALTER TABLE graph_nodes ADD COLUMN pos_x REAL DEFAULT NULL');
+            await this.db.runAsync('ALTER TABLE graph_nodes ADD COLUMN pos_y REAL DEFAULT NULL');
+            console.log('[Database] Migration complete: graph_nodes pos_x/pos_y added.');
+        } catch (e) {
+            console.error('[Database] graph_nodes position migration failed', e);
+        }
     }
 
     private async checkAndClearDailyLog() {

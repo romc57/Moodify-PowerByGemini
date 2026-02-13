@@ -1,10 +1,9 @@
 import { THEMES } from '@/constants/theme';
-import { spotifyRemote } from '@/services/spotify/SpotifyRemoteService';
 import { usePlayerStore } from '@/stores/PlayerStore';
 import { useSettingsStore } from '@/stores/SettingsStore';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 
@@ -16,30 +15,7 @@ interface QueueModalProps {
 export function QueueModal({ visible, onClose }: QueueModalProps) {
     const { theme } = useSettingsStore();
     const activeTheme = THEMES[theme] || THEMES.midnight;
-    const { currentTrack } = usePlayerStore();
-
-    const [queueTracks, setQueueTracks] = useState<any[]>([]);
-    const [isLoading, setIsLoading] = useState(false);
-
-    useEffect(() => {
-        if (visible) {
-            loadQueue();
-        }
-    }, [visible]);
-
-    const loadQueue = async () => {
-        setIsLoading(true);
-        try {
-            const data = await spotifyRemote.getUserQueue();
-            if (data && data.queue) {
-                setQueueTracks(data.queue);
-            }
-        } catch (e) {
-            console.error('Failed to load queue', e);
-        } finally {
-            setIsLoading(false);
-        }
-    };
+    const { currentTrack, queue, syncFromSpotify } = usePlayerStore();
 
     if (!visible) return null;
 
@@ -62,7 +38,7 @@ export function QueueModal({ visible, onClose }: QueueModalProps) {
 
                     <View style={[styles.headerContainer, { backgroundColor: activeTheme.surfaceStrong }]}>
                         <Text style={[styles.title, { color: activeTheme.text }]}>Up Next</Text>
-                        <Pressable onPress={loadQueue} disabled={isLoading}>
+                        <Pressable onPress={() => syncFromSpotify()}>
                             <Ionicons name="refresh" size={20} color={activeTheme.textSecondary} />
                         </Pressable>
                     </View>
@@ -95,20 +71,18 @@ export function QueueModal({ visible, onClose }: QueueModalProps) {
                         {/* Queue List */}
                         <View style={styles.section}>
                             <Text style={[styles.sectionTitle, { color: activeTheme.textSecondary }]}>Next From Queue</Text>
-                            {isLoading ? (
-                                <Text style={[styles.loadingText, { color: activeTheme.textSecondary }]}>Loading queue...</Text>
-                            ) : queueTracks.length === 0 ? (
+                            {queue.length === 0 ? (
                                 <Text style={[styles.emptyText, { color: activeTheme.textSecondary }]}>Queue is empty</Text>
                             ) : (
-                                queueTracks.map((track, index) => (
+                                queue.map((track, index) => (
                                     <View key={`${track.uri}-${index}`} style={[styles.trackRow, { backgroundColor: activeTheme.surface }]}>
                                         <Text style={[styles.trackIndex, { color: activeTheme.textMuted }]}>{index + 1}</Text>
                                         <View style={styles.trackInfo}>
                                             <Text style={[styles.trackTitle, { color: activeTheme.text }]} numberOfLines={1}>
-                                                {track.name}
+                                                {track.title}
                                             </Text>
                                             <Text style={[styles.trackArtist, { color: activeTheme.textMuted }]} numberOfLines={1}>
-                                                {track.artists?.[0]?.name}
+                                                {track.artist}
                                             </Text>
                                         </View>
                                     </View>
@@ -216,10 +190,6 @@ const styles = StyleSheet.create({
     },
     trackArtist: {
         fontSize: 14,
-    },
-    loadingText: {
-        marginTop: 20,
-        textAlign: 'center',
     },
     emptyText: {
         marginTop: 20,

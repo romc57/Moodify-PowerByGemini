@@ -988,10 +988,24 @@ export class GraphService {
             }
         }
 
-        // 2. Persist to Storage (Async)
-        // We only persist to localStorage on Web for now as SQLite requires schema migration for x/y
-        // which is overkill for a catchy feature.
-        if (!dbService.database) {
+        // 2. Persist to Storage
+        if (dbService.database) {
+            // SQLite: batch-update positions in a single transaction
+            try {
+                const db = dbService.database;
+                await db.withTransactionAsync(async () => {
+                    for (const n of nodes) {
+                        await db.runAsync(
+                            'UPDATE graph_nodes SET pos_x = ?, pos_y = ? WHERE id = ?',
+                            [n.x, n.y, n.id]
+                        );
+                    }
+                });
+                console.log(`[GraphService] Persisted ${nodes.length} positions to SQLite`);
+            } catch (e) {
+                console.error('[GraphService] Failed to persist positions to SQLite', e);
+            }
+        } else {
             this.persistToStorage();
         }
 
@@ -1021,8 +1035,11 @@ export class GraphService {
             return this.snapshotCache;
         }
 
+        // On Android/native, DB init is async; wait so we don't return empty memory fallback
+        await dbService.waitUntilReady();
+
         if (!dbService.database) {
-            // Memory fallback
+            // Memory fallback (web or no SQLite)
             const result = {
                 nodes: Array.from(this.memoryNodes.values()),
                 edges: this.memoryEdges.map(e => ({ ...e, weight: e.weight || 1.0 })),
@@ -1037,8 +1054,13 @@ export class GraphService {
             const rawEdges = await dbService.database.getAllAsync<any>('SELECT * FROM graph_edges');
             console.timeEnd('[Perf] getGraphSnapshot DB Fetch');
 
-            // Ensure data is parsed correctly for nodes
-            const parsedNodes = nodes.map(n => ({ ...n, data: JSON.parse(n.data || '{}') }));
+            // Ensure data is parsed correctly for nodes; map pos_x/pos_y → x/y
+            const parsedNodes = nodes.map((n: any) => ({
+                ...n,
+                data: JSON.parse(n.data || '{}'),
+                x: n.pos_x ?? undefined,
+                y: n.pos_y ?? undefined,
+            }));
 
             // Map raw edges to GraphEdge format
             const edges: GraphEdge[] = rawEdges.map((e: any) => ({

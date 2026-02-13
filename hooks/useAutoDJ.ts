@@ -22,13 +22,16 @@ export function useAutoDJ() {
 
     // Track Change Listener for Skip Tracker & DB Recording
     useEffect(() => {
-        if (currentTrack && currentTrack.uri !== lastTrackIdRef.current) {
-            lastTrackIdRef.current = currentTrack.uri;
-            onTrackChange(currentTrack.uri, currentTrack.title, currentTrack.artist);
+        if (!currentTrack || currentTrack.uri === lastTrackIdRef.current) return;
+        // Don't feed skip tracker or record during vibe setup (queue is being replaced)
+        const { isLoading, isQueueModifying } = usePlayerStore.getState();
+        if (isLoading || isQueueModifying) return;
 
-            // Record Play in DB (Async)
-            recommendationService.recordPlay(currentTrack, false, { source: 'auto_dj' });
-        }
+        lastTrackIdRef.current = currentTrack.uri;
+        onTrackChange(currentTrack.uri, currentTrack.title, currentTrack.artist);
+
+        // Record Play in DB (Async)
+        recommendationService.recordPlay(currentTrack, false, { source: 'auto_dj' });
     }, [currentTrack]);
 
     // Reset processing lock when track changes (safety valve)
@@ -98,12 +101,7 @@ export function useAutoDJ() {
         const isVibeLoop = consecutiveListens >= VIBE_LOOP_LISTEN_THRESHOLD && consecutiveListens !== lastProcessedListenCount.current;
         const isCooldown = Date.now() - lastExpansionTime.current < EXPANSION_COOLDOWN_MS;
 
-        if (!(isLowQueue || isVibeLoop) || isCooldown) return;
-
-        if (lock.current.isLocked) {
-            lock.current.wait();
-            return;
-        }
+        if (!(isLowQueue || isVibeLoop) || isCooldown || lock.current.isLocked) return;
 
         console.log(`[AutoDJ] Triggering Expansion. Reason: ${isLowQueue ? 'Low Queue' : 'Keep the Vibe'}`);
         lastExpansionTime.current = Date.now();

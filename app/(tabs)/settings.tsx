@@ -13,6 +13,7 @@ import {
   ModelId,
 } from '@/services/gemini/GeminiService';
 import { useSpotifyAuth } from '@/services/spotify/SpotifyAuthService';
+import { usePlayerStore } from '@/stores/PlayerStore';
 import { useSettingsStore } from '@/stores/SettingsStore';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -201,6 +202,9 @@ export default function SettingsScreen() {
 
     if (result.success) {
       checkConnection();
+      // Start playback sync so Home and Graph have current state
+      usePlayerStore.getState().syncFromSpotify().catch(() => {});
+      usePlayerStore.getState().startAutoSync(5000);
       Alert.alert('Success', 'Spotify connected!');
     } else if (result.cancelled) {
       // User cancelled

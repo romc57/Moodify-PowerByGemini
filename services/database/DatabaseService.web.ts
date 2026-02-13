@@ -70,6 +70,10 @@ class DatabaseServiceWeb {
         return null;
     }
 
+    async waitUntilReady(): Promise<void> {
+        await this.initPromise;
+    }
+
     private checkAndClearDailyLog() {
         try {
             const prefs = getStorage<Record<string, string>>(STORAGE_KEYS.USER_PREFERENCES, {});

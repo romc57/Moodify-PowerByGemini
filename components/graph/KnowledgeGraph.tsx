@@ -1,9 +1,10 @@
 import type { ModernTheme } from '@/constants/theme';
 import type { EdgeType, NodeType } from '@/services/graph/GraphService';
 import { graphService } from '@/services/graph/GraphService';
+import { usePlayerStore } from '@/stores/PlayerStore';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GraphCanvas } from './GraphCanvas';
 import { GraphControls } from './GraphControls';
@@ -19,6 +20,9 @@ interface KnowledgeGraphProps {
     theme: ModernTheme;
 }
 
+const MIN_CANVAS_WIDTH = 300;
+const MIN_CANVAS_HEIGHT = 200;
+
 export function KnowledgeGraph({ theme }: KnowledgeGraphProps) {
     const { width: screenWidth, height: screenHeight } = useWindowDimensions();
     const insets = useSafeAreaInsets();
@@ -28,18 +32,19 @@ export function KnowledgeGraph({ theme }: KnowledgeGraphProps) {
     const [loading, setLoading] = useState(true);
     const [selectedNode, setSelectedNode] = useState<SimNode | null>(null);
 
+    // Canvas dimensions from onLayout (fixes Android where useWindowDimensions can be 0)
+    const [layoutSize, setLayoutSize] = useState({ width: screenWidth || MIN_CANVAS_WIDTH, height: MIN_CANVAS_HEIGHT });
+
     // Visibility toggles
     const [nodeVis, setNodeVis] = useState<Record<string, boolean>>(() => allOn(NODE_TYPES));
     const [edgeVis, setEdgeVis] = useState<Record<string, boolean>>(() => allOn(EDGE_TYPES));
 
-    // Canvas dimensions (full width, remaining height after controls)
-    const canvasWidth = screenWidth;
-    const controlsHeight = 140; // approximate height for controls
-    const canvasHeight = screenHeight - insets.top - insets.bottom - controlsHeight - 70; // 70 = tab bar
+    const canvasWidth = Math.max(MIN_CANVAS_WIDTH, layoutSize.width, screenWidth || 0);
+    const canvasHeight = Math.max(MIN_CANVAS_HEIGHT, layoutSize.height);
 
     const { nodes, edges, reload, isSimulating, progress } = useForceSimulation({
         width: canvasWidth,
-        height: Math.max(200, canvasHeight),
+        height: canvasHeight,
         rawNodes,
         rawEdges,
     });
@@ -73,7 +78,9 @@ export function KnowledgeGraph({ theme }: KnowledgeGraphProps) {
 
     const handleRefresh = useCallback(() => {
         setSelectedNode(null);
-        loadGraph(true); // Force refresh
+        // Sync playback state from Spotify so Home has fresh data when user goes back
+        usePlayerStore.getState().syncFromSpotify().catch(() => {});
+        loadGraph(true); // Force refresh graph data from DB
     }, [loadGraph]);
 
     const handleNodePress = useCallback((node: SimNode) => {
@@ -92,9 +99,12 @@ export function KnowledgeGraph({ theme }: KnowledgeGraphProps) {
         setLoading(true);
         try {
             await graphService.ingestLikedSongs();
-            loadGraph(true); // Force refresh after import
-        } catch (e) {
+            await loadGraph(true); // Force refresh after import
+        } catch (e: any) {
             console.error('[KnowledgeGraph] Re-import failed', e);
+            const message = e?.message || e?.toString?.() || 'Sync failed. Check Spotify connection in Settings.';
+            Alert.alert('Sync Spotify Failed', message);
+        } finally {
             setLoading(false);
         }
     }, [loadGraph]);
@@ -153,8 +163,14 @@ export function KnowledgeGraph({ theme }: KnowledgeGraphProps) {
                 </View>
             </View>
 
-            {/* Canvas */}
-            <View style={styles.canvasWrapper}>
+            {/* Canvas - onLayout ensures real dimensions on Android (useWindowDimensions can be 0) */}
+            <View
+                style={styles.canvasWrapper}
+                onLayout={(e) => {
+                    const { width: w, height: h } = e.nativeEvent.layout;
+                    if (w > 0 && h > 0) setLayoutSize({ width: w, height: h });
+                }}
+            >
                 <GraphCanvas
                     nodes={nodes}
                     edges={edges}
@@ -163,7 +179,7 @@ export function KnowledgeGraph({ theme }: KnowledgeGraphProps) {
                     theme={theme}
                     onNodePress={handleNodePress}
                     width={canvasWidth}
-                    height={Math.max(200, canvasHeight)}
+                    height={canvasHeight}
                 />
 
                 {/* Detail Card */}

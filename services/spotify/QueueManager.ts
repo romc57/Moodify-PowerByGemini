@@ -108,6 +108,9 @@ async function addTracksToQueue(
  * Strategy:
  * Pass ALL tracks to the play command to create a proper multi-track context.
  * This ensures next/prev work correctly and tracks play sequentially.
+ * Note: Spotify has no "clear queue" API. Old user-queue items may leak in
+ * after the first track, but that's preferable to skipping through them
+ * (which causes audible noise/mess).
  */
 export async function replaceQueue(
     tracks: QueuedTrack[]
@@ -124,7 +127,7 @@ export async function replaceQueue(
         const allUris = tracks.map(t => t.uri);
         await spotifyRemote.play(allUris);
 
-        // Wait for playback to start
+        // 3. Wait for playback to start
         await waitForTrackToPlay(firstTrack.uri, 5000);
 
         return {

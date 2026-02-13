@@ -1,7 +1,7 @@
 import type { ModernTheme } from '@/constants/theme';
 import { getUniqueEdgeColor, getUniqueNodeColor } from '@/services/graph/graphColors';
 import { Ionicons } from '@expo/vector-icons';
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import {
     GestureHandlerRootView,
@@ -35,6 +35,13 @@ export function GraphCanvas({
     width,
     height,
 }: GraphCanvasProps) {
+    // O(1) node lookup by id — avoids O(n) find() per edge during render
+    const nodeMap = useMemo(() => {
+        const map = new Map<number, SimNode>();
+        for (const n of nodes) map.set(n.id, n);
+        return map;
+    }, [nodes]);
+
     const [scale, setScale] = useState(1);
     const [translateX, setTranslateX] = useState(0);
     const [translateY, setTranslateY] = useState(0);
@@ -96,18 +103,21 @@ export function GraphCanvas({
         baseScale.current = newScale;
     };
 
+    const hasValidSize = width > 0 && height > 0;
+
     return (
         <GestureHandlerRootView style={styles.container}>
             <PinchGestureHandler onGestureEvent={onPinch} onHandlerStateChange={onPinchEnd}>
                 <PanGestureHandler onGestureEvent={onPan} onHandlerStateChange={onPanEnd}>
-                    <View style={[styles.canvas, { backgroundColor: theme.background }]}>
+                    <View style={[styles.canvas, { backgroundColor: theme.background, width: width || 1, height: height || 1 }]}>
+                        {!hasValidSize ? null : (
                         <Svg width={width} height={height}>
                             {/* Edges */}
                             {edges.map((edge, i) => {
                                 if (!edgeVisibility[edge.type]) return null;
                                 // Also hide edges connected to hidden node types
-                                const srcNode = nodes.find(n => n.id === edge.sourceId);
-                                const tgtNode = nodes.find(n => n.id === edge.targetId);
+                                const srcNode = nodeMap.get(edge.sourceId);
+                                const tgtNode = nodeMap.get(edge.targetId);
                                 if (srcNode && !nodeVisibility[srcNode.type]) return null;
                                 if (tgtNode && !nodeVisibility[tgtNode.type]) return null;
 
@@ -182,6 +192,7 @@ export function GraphCanvas({
                                 );
                             })}
                         </Svg>
+                        )}
 
                         {/* Zoom Controls */}
                         <View style={styles.zoomControls}>

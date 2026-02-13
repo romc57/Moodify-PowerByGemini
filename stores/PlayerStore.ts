@@ -183,6 +183,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         // This handles "backend" logic like recording plays
         const MIN_LISTEN_MS = GRAPH_COMMIT_LISTEN_THRESHOLD_MS;
         spotifyRemote.startPolling(async (type, track) => {
+            // Don't record track changes during vibe setup (queue is being replaced, would fire multiple times)
+            if (get().isLoading || get().isQueueModifying) return;
+
             const listenMs = track.listenMs ?? 0;
             console.log(`[PlayerStore] Track detected as ${type}: ${track.title} (listened ${Math.round(listenMs / 1000)}s)`);
 
@@ -249,15 +252,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
                 let synchronizedQueue: Track[] = [];
 
                 if (queueData) {
-                    // Map Spotify Queue to our Track format
-                    synchronizedQueue = queueData.queue.map((item: any) => ({
-                        title: item.name,
-                        artist: item.artists?.[0]?.name || 'Unknown',
-                        uri: item.uri,
-                        artwork: item.album?.images?.[0]?.url,
-                        duration_ms: item.duration_ms,
-                        origin: 'sync'
-                    }));
+                    // Map Spotify Queue to our Track format, dedup by URI
+                    // (Spotify repeat-all causes the API to return cycling duplicates)
+                    const seen = new Set<string>();
+                    for (const item of queueData.queue) {
+                        if (!item.uri || seen.has(item.uri)) continue;
+                        seen.add(item.uri);
+                        synchronizedQueue.push({
+                            title: item.name,
+                            artist: item.artists?.map((a: any) => a.name).join(', ') || 'Unknown',
+                            uri: item.uri,
+                            artwork: item.album?.images?.[0]?.url,
+                            duration_ms: item.duration_ms,
+                            origin: 'sync'
+                        });
+                    }
                 }
 
                 get().setInternalState({

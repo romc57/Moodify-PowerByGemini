@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -21,12 +21,14 @@ interface AIReasoningChipProps {
   text: string;
   isThinking?: boolean;
   accentColor?: string;
+  onDismiss?: () => void;
 }
 
 export const AIReasoningChip: React.FC<AIReasoningChipProps> = ({
   text,
   isThinking = false,
   accentColor = '#A855F7',
+  onDismiss,
 }) => {
   const sparkleRotation = useSharedValue(0);
   const sparkleScale = useSharedValue(1);
@@ -74,6 +76,11 @@ export const AIReasoningChip: React.FC<AIReasoningChipProps> = ({
       <Text style={styles.text} numberOfLines={2}>
         {text}
       </Text>
+      {onDismiss && (
+        <Pressable onPress={onDismiss} hitSlop={8} style={styles.dismissBtn}>
+          <Ionicons name="close" size={14} color="rgba(255,255,255,0.5)" />
+        </Pressable>
+      )}
     </View>
   );
 
@@ -152,5 +159,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontStyle: 'italic',
     lineHeight: 20,
+  },
+  dismissBtn: {
+    marginLeft: 8,
+    padding: 2,
   },
 });

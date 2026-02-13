@@ -39,14 +39,23 @@ export const useErrorStore = create<ErrorState>((set, get) => ({
     setError: (error: ServiceError) => {
         const state = get();
 
+        // Always log for debugging
+        console.log(`[ErrorStore] ${error.severity.toUpperCase()} [${error.service}]: ${error.code} - ${error.userMessage}${error.silent ? ' (silent)' : ''}`);
+
+        // Add to history (keep last 20) — silent or not, always track
+        const newHistory = [error, ...state.history].slice(0, 20);
+
+        // Silent errors: log + history only, no UI banner
+        if (error.silent) {
+            set({ history: newHistory });
+            return;
+        }
+
         // Clear existing timer for this service
         const existingTimer = state.dismissTimers.get(error.service);
         if (existingTimer) {
             clearTimeout(existingTimer);
         }
-
-        // Add to history (keep last 20)
-        const newHistory = [error, ...state.history].slice(0, 20);
 
         // Create new maps (immutable update)
         const newErrors = new Map(state.errors);
@@ -54,12 +63,14 @@ export const useErrorStore = create<ErrorState>((set, get) => ({
 
         const newTimers = new Map(state.dismissTimers);
 
-        // Set up auto-dismiss for transient errors
+        // Auto-dismiss non-critical errors (transient errors use configured duration,
+        // non-transient errors use a longer 15s timeout so they don't get stuck)
         const dismissDuration = getAutoDismissDuration(error);
-        if (dismissDuration !== null && isTransientError(error)) {
+        if (dismissDuration !== null) {
+            const timeout = isTransientError(error) ? dismissDuration : 15_000;
             const timer = setTimeout(() => {
                 get().clearError(error.service);
-            }, dismissDuration);
+            }, timeout);
             newTimers.set(error.service, timer);
         }
 
@@ -68,9 +79,6 @@ export const useErrorStore = create<ErrorState>((set, get) => ({
             history: newHistory,
             dismissTimers: newTimers
         });
-
-        // Log for debugging
-        console.log(`[ErrorStore] ${error.severity.toUpperCase()} [${error.service}]: ${error.code} - ${error.userMessage}`);
     },
 
     clearError: (service: ServiceType) => {

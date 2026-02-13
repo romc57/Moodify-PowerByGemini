@@ -1,4 +1,4 @@
-import { makeRedirectUri, ResponseType, useAuthRequest, AuthSessionResult } from 'expo-auth-session';
+import { AuthSessionResult, makeRedirectUri, ResponseType, useAuthRequest } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
@@ -17,6 +17,7 @@ const discovery = {
 // Scopes required for the app
 const SPOTIFY_SCOPES = [
     'user-read-email',
+    'user-read-private',
     'user-read-playback-state',
     'user-modify-playback-state',
     'user-read-currently-playing',
@@ -163,6 +164,7 @@ interface UseSpotifyAuthReturn {
     state: SpotifyAuthState;
     login: () => Promise<{ success: boolean; error?: string; cancelled?: boolean }>;
     clientId: string;
+    refreshClientId: (directValue?: string) => void;
 }
 
 /**
@@ -177,12 +179,19 @@ export function useSpotifyAuth(): UseSpotifyAuthReturn {
         error: null,
     });
 
+    // Set client ID directly or re-read from DB
+    const refreshClientId = useCallback((directValue?: string) => {
+        if (directValue) {
+            setClientId(directValue);
+        } else {
+            getSpotifyClientId().then(setClientId);
+        }
+    }, []);
+
     // Load client ID on mount
     useEffect(() => {
-        getSpotifyClientId().then((id) => {
-            setClientId(id);
-        });
-    }, []);
+        refreshClientId();
+    }, [refreshClientId]);
 
     // Create auth request
     const [request, , promptAsync] = useAuthRequest(
@@ -215,7 +224,6 @@ export function useSpotifyAuth(): UseSpotifyAuthReturn {
 
         try {
             console.log('[SpotifyAuth] Starting auth flow...');
-            console.log('[SpotifyAuth] Redirect URI:', getRedirectUri());
 
             let result;
 
@@ -250,5 +258,5 @@ export function useSpotifyAuth(): UseSpotifyAuthReturn {
         }
     }, [request, clientId, promptAsync]);
 
-    return { state, login, clientId };
+    return { state, login, clientId, refreshClientId };
 }

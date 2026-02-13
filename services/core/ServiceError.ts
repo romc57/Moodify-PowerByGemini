@@ -27,6 +27,8 @@ export interface ServiceError {
     timestamp: number;
     /** Optional technical details for logging */
     details?: string;
+    /** If true, only log — don't show UI banner (auto-recovered errors) */
+    silent?: boolean;
 }
 
 /**
@@ -39,7 +41,8 @@ function createError(
     userMessage: string,
     retryable: boolean,
     details?: string,
-    actionAction?: { label: string; link: string; type: 'navigate' | 'retry' | 'dismiss' }
+    actionAction?: { label: string; link: string; type: 'navigate' | 'retry' | 'dismiss' },
+    silent?: boolean
 ): ServiceError {
     return {
         service,
@@ -49,6 +52,7 @@ function createError(
         retryable,
         timestamp: Date.now(),
         details,
+        silent,
         actionLabel: actionAction?.label,
         actionLink: actionAction?.link,
         actionType: actionAction?.type
@@ -77,7 +81,9 @@ export const GeminiErrors = {
         'warning',
         'AI is busy. Retrying automatically...',
         true,
-        details
+        details,
+        undefined,
+        true // silent — auto-retried
     ),
 
     /** Network error connecting to Gemini */
@@ -97,7 +103,9 @@ export const GeminiErrors = {
         'warning',
         'AI session expired. Restarting conversation...',
         true,
-        details
+        details,
+        undefined,
+        true // silent — auto-recovered
     ),
 
     /** Generic Gemini error */
@@ -117,7 +125,9 @@ export const GeminiErrors = {
         'warning',
         'AI response was malformed. Retrying...',
         true,
-        details
+        details,
+        undefined,
+        true // silent — auto-retried with fallback
     ),
 
     /** Concurrent request blocked */
@@ -126,7 +136,10 @@ export const GeminiErrors = {
         'CONCURRENT_BLOCKED',
         'warning',
         'AI is already processing a request.',
-        false
+        false,
+        undefined,
+        undefined,
+        true // silent — normal flow, first request still running
     )
 };
 
@@ -182,7 +195,9 @@ export const SpotifyErrors = {
         'warning',
         `Spotify auth cooling down. Retry in ${Math.ceil(remainingMs / 1000)}s.`,
         true,
-        `Lockout remaining: ${remainingMs}ms`
+        `Lockout remaining: ${remainingMs}ms`,
+        undefined,
+        true // silent — temporary cooldown, auto-recovers
     ),
 
     /** Network error connecting to Spotify */
@@ -202,7 +217,9 @@ export const SpotifyErrors = {
         'warning',
         trackName ? `Could not find "${trackName}" on Spotify.` : 'Track not found on Spotify.',
         false,
-        trackName
+        trackName,
+        undefined,
+        true // silent — individual track skip, doesn't break flow
     ),
 
     /** Search failed */
@@ -212,7 +229,9 @@ export const SpotifyErrors = {
         'warning',
         'Spotify search failed. Trying alternatives...',
         true,
-        details
+        details,
+        undefined,
+        true // silent — auto-retried with alternatives
     ),
 
     /** Generic Spotify error */
@@ -247,7 +266,9 @@ export const DatabaseErrors = {
         'warning',
         'Database operation failed.',
         true,
-        details
+        details,
+        undefined,
+        true // silent — internal, doesn't affect user flow
     )
 };
 

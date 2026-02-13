@@ -1,4 +1,5 @@
 import { GeminiErrors, ServiceError } from '@/services/core/ServiceError';
+import { useAIActivityStore } from '@/stores/AIActivityStore';
 import { useErrorStore } from '@/stores/ErrorStore';
 import axios from 'axios';
 import { create } from 'zustand';
@@ -361,13 +362,11 @@ class GeminiService {
         const status = error.response?.status;
         const errorMessage = error.response?.data?.error?.message || error.message || '';
 
-        console.error('[Gemini] Error:', { status, message: errorMessage, context });
+        // Silent errors that don't affect UX - skip logging entirely
+        if (error instanceof SyntaxError || error.name === 'SyntaxError') return;
+        if (errorMessage === 'Concurrent Request Blocked') return;
 
-        // JSON parse errors are already emitted by parseJsonResponse - don't double-emit
-        if (error instanceof SyntaxError || error.name === 'SyntaxError') {
-            console.warn(`[Gemini] JSON parse error in ${context} (already emitted)`);
-            return;
-        }
+        console.error('[Gemini] Error:', { status, message: errorMessage, context });
 
         if (status === 400) {
             if (errorMessage.includes('thoughtSignature') || errorMessage.includes('Invalid Argument')) {
@@ -402,7 +401,8 @@ class GeminiService {
             } catch (error: any) {
                 lastError = error;
                 const status = error.response?.status;
-                const isRetryable = status === 429 || (status >= 500 && status < 600);
+                const isNetworkError = error.message === 'Network Error' || error.code === 'ECONNABORTED';
+                const isRetryable = status === 429 || (status >= 500 && status < 600) || isNetworkError;
 
                 if (!isRetryable || attempt === maxRetries) break;
 
@@ -481,7 +481,8 @@ class GeminiService {
         apiKey: string,
         prompt: string,
         config: Partial<GeminiGenerationConfig> = {},
-        includeThoughtSignature: boolean = false
+        includeThoughtSignature: boolean = false,
+        activityLabel?: string
     ): Promise<any> {
         const generationConfig = this.buildGenerationConfig(config);
 
@@ -491,24 +492,37 @@ class GeminiService {
         };
 
         if (this.isGenerating) {
+            this.emitError(GeminiErrors.concurrentBlocked());
             throw new Error('Concurrent Request Blocked');
         }
 
         this.isGenerating = true;
+        if (activityLabel) {
+            useAIActivityStore.getState().setActive(activityLabel);
+        }
 
         try {
             return await this.executeWithFallback(apiKey, requestBody, includeThoughtSignature);
         } finally {
             this.isGenerating = false;
+            useAIActivityStore.getState().setIdle();
         }
     }
 
     async validateKey(key: string): Promise<{ valid: boolean; error?: string }> {
         if (!key) return { valid: false, error: 'API Key is empty' };
 
-        // Test with the fastest model
-        const status = await this.testModel('gemini-2.0-flash', key);
-        return status.available ? { valid: true } : { valid: false, error: status.error };
+        // Try each model in priority order — succeed on the first one that works
+        let lastError = '';
+        for (const modelId of MODEL_PRIORITY) {
+            const status = await this.testModel(modelId, key);
+            if (status.available) {
+                this.currentModel = modelId;
+                return { valid: true };
+            }
+            lastError = status.error || lastError;
+        }
+        return { valid: false, error: lastError || 'All models unavailable for this key' };
     }
 
     async testConnection(): Promise<boolean> {
@@ -552,7 +566,7 @@ class GeminiService {
 
         try {
             console.time('[Perf] Gemini Generation');
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.SMALL, thinkingLevel: 'low' }, true);
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.SMALL, thinkingLevel: 'low' }, true, 'DJ is picking tracks...');
             console.timeEnd('[Perf] Gemini Generation');
             const text = this.extractResponseText(response);
             if (!text) return null;
@@ -600,7 +614,7 @@ class GeminiService {
         );
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.LARGE, thinkingLevel: 'low' }, true);
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.LARGE, thinkingLevel: 'low' }, true, 'Generating vibe options...');
             const text = this.extractResponseText(response);
             if (!text) return [];
 
@@ -623,7 +637,7 @@ class GeminiService {
         const prompt = GeminiPrompts.generateRescueVibePrompt(recentSkips, favorites, excludeTracks);
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.STANDARD, thinkingLevel: 'medium' }, true);
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.STANDARD, thinkingLevel: 'medium' }, true, 'Finding a new vibe...');
             const text = this.extractResponseText(response);
             if (!text) return null;
 
@@ -660,7 +674,7 @@ class GeminiService {
         );
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.MEDIUM, thinkingLevel: 'low' }, true);
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.MEDIUM, thinkingLevel: 'low' }, true, 'Expanding your vibe...');
             const text = this.extractResponseText(response);
             if (!text) return { items: [] };
 
@@ -696,7 +710,7 @@ class GeminiService {
         const prompt = GeminiPrompts.generateMoodAssessmentPrompt(currentTrack, recentHistory, userContext);
 
         try {
-            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.SMALL, thinkingLevel: 'minimal' }, true);
+            const response = await this.makeRequest(apiKey, prompt, { maxOutputTokens: TOKEN_LIMITS.SMALL, thinkingLevel: 'minimal' }, true, 'Reading the vibe...');
             const text = this.extractResponseText(response);
             if (!text) return null;
 

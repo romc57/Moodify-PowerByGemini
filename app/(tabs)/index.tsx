@@ -65,6 +65,21 @@ export default function HomeScreen() {
   const [vibeOptions, setVibeOptions] = useState<any[]>([]);
   const [showVibeSelector, setShowVibeSelector] = useState(false);
   const [geminiReasoning, setGeminiReasoning] = useState<string | null>(null);
+  const reasoningTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  /** Set reasoning text with optional auto-clear (for error/status messages). */
+  const setReasoningWithAutoClear = (text: string, autoClearMs?: number) => {
+    if (reasoningTimerRef.current) clearTimeout(reasoningTimerRef.current);
+    setGeminiReasoning(text);
+    if (autoClearMs) {
+      reasoningTimerRef.current = setTimeout(() => setGeminiReasoning(null), autoClearMs);
+    }
+  };
+
+  const clearReasoning = () => {
+    if (reasoningTimerRef.current) clearTimeout(reasoningTimerRef.current);
+    setGeminiReasoning(null);
+  };
 
   // Animation Values
   const scale = useSharedValue(1);
@@ -145,7 +160,15 @@ export default function HomeScreen() {
 
   const handleRefreshVibe = async () => {
     setIsLoading(true);
-    setGeminiReasoning("Gemini is analyzing your vibe options...");
+
+    // Show what we're sending to Gemini
+    const promptBrief = [
+      assessedMood ? `Mood: ${assessedMood}` : null,
+      currentTrack ? `Now: ${currentTrack.title}` : null,
+      'Taste profile + favorites',
+    ].filter(Boolean).join(' · ');
+    setGeminiReasoning(`Asking Gemini: ${promptBrief}`);
+
     try {
       // 1. Get 8 Vibe Options
       const userInstruction = assessedMood
@@ -159,12 +182,12 @@ export default function HomeScreen() {
         setShowVibeSelector(true);
         setGeminiReasoning("Pick a vibe to start your journey.");
       } else {
-        setGeminiReasoning("Couldn't find a new vibe right now.");
+        setReasoningWithAutoClear("Couldn't find a new vibe right now.", 8000);
         Alert.alert("AI Error", "Could not generate vibe options. The models might be busy or hallucinating. Please try again.");
       }
     } catch (e) {
       Alert.alert("Error", "Failed to refresh vibe.");
-      setGeminiReasoning("Error connecting to Gemini.");
+      setReasoningWithAutoClear("Error connecting to Gemini.", 8000);
     } finally {
       setIsLoading(false);
     }
@@ -183,7 +206,7 @@ export default function HomeScreen() {
     }
 
     setIsLoading(true);
-    setGeminiReasoning(`Setting the vibe: ${option.title}...`);
+    setGeminiReasoning(`Gemini: expand "${option.track.title}" · ${option.title}`);
 
     // Clear seen URIs for fresh vibe (allows tracks from previous vibes)
     validatedQueueService.clearSession();
@@ -218,13 +241,14 @@ export default function HomeScreen() {
       } else {
         // STRICT MODE: Fail if no validated URI. 
         // We do *not* want to blind search and play the wrong song anymore.
-        setGeminiReasoning("Vibe unavailable (Song not found).");
+        setReasoningWithAutoClear("Vibe unavailable (Song not found).", 8000);
         Alert.alert("Song Not Found", "This vibe's seed song isn't available on Spotify right now. Please try another vibe.");
         setIsLoading(false);
         return;
       }
 
       // 1. Expand Vibe First (Atomic Operation)
+      setGeminiReasoning(`Gemini → Spotify: validating tracks for "${option.title}"...`);
       const { items: expandedItems, mood } = await recommendationService.expandVibe(
         { title: option.track.title, artist: option.track.artist },
         option.description
@@ -287,18 +311,19 @@ export default function HomeScreen() {
       fullList.forEach((t, i) => console.log(`  ${i + 1}. "${t.title}" by ${t.artist} [${t.uri}]`));
 
       // 3. Play All At Once (Replaces Spotify Context & Queue)
+      setGeminiReasoning(`Clearing queue & starting ${fullList.length} tracks...`);
       await usePlayerStore.getState().playVibe(fullList);
 
       recommendationService.recordPlay(seedTrack, false, { source: 'vibe_select' });
 
       if (fullList.length > 1) {
-        setGeminiReasoning(`Vibe set: ${option.title}`);
+        setReasoningWithAutoClear(`Vibe set: ${option.title} · ${fullList.length} tracks`, 10000);
       } else {
-        setGeminiReasoning("Vibe set (Queue expansion failed).");
+        setReasoningWithAutoClear("Vibe set (Queue expansion failed).", 8000);
       }
 
-      // Re-enable skip tracking after vibe is set (with delay for queue to settle)
-      setTimeout(() => setRescueMode(false), 3000);
+      // Re-enable skip tracking after vibe is set (wait for queue to settle so we don't count rapid track changes)
+      setTimeout(() => setRescueMode(false), 6000);
 
     } catch (e: any) {
       console.error("Vibe Selection Error:", e);
@@ -311,7 +336,7 @@ export default function HomeScreen() {
       } else {
         Alert.alert("Error", "Failed to load vibe. Please check your connection or try again.");
       }
-      setGeminiReasoning("Error setting vibe.");
+      setReasoningWithAutoClear("Error setting vibe.", 8000);
       setRescueMode(false); // Re-enable skip tracking on error
     } finally {
       setIsLoading(false);
@@ -433,7 +458,9 @@ export default function HomeScreen() {
                     <Animated.View style={spinStyle}>
                       <Ionicons name="sync" size={18} color="#fff" />
                     </Animated.View>
-                    <Text style={styles.refreshText}>Analyzing...</Text>
+                    <Text style={styles.refreshText} numberOfLines={1}>
+                      {geminiReasoning?.slice(0, 30) || 'Analyzing...'}
+                    </Text>
                   </>
                 ) : (
                   <>
@@ -451,7 +478,9 @@ export default function HomeScreen() {
               <View style={{ marginTop: 20 }}>
                 <AIReasoningChip
                   text={geminiReasoning}
+                  isThinking={isLoading}
                   accentColor={activeTheme.aiPurple}
+                  onDismiss={!isLoading ? clearReasoning : undefined}
                 />
               </View>
             )}
