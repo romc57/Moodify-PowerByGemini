@@ -55,7 +55,8 @@
       "expo-web-browser",
       "expo-background-task"
     ],
-    "reactCompiler": true
+    "experiments": {
+      "reactCompiler": true
+    }
   }
-}
 }
