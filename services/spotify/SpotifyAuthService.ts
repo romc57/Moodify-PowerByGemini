@@ -35,8 +35,11 @@ const SPOTIFY_SCOPES = [
  */
 export function getRedirectUri(): string {
     if (Platform.OS === 'web') {
-        // Dynamically use current origin so it works on any host/port
         if (typeof window !== 'undefined') {
+            // Handle GitHub Pages subpath
+            if (window.location.pathname.startsWith('/Moodify-PowerByGemini')) {
+                return `${window.location.origin}/Moodify-PowerByGemini/callback`;
+            }
             return `${window.location.origin}/callback`;
         }
         return 'http://localhost:8081/callback';
