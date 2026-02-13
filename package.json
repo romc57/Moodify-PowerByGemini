@@ -2,7 +2,7 @@
   "name": "moodify-mobile",
   "main": "expo-router/entry",
   "version": "1.0.0",
-  "homepage": "https://romc57.github.io/Moodify-PowerByGemini",
+  "version": "1.0.0",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
